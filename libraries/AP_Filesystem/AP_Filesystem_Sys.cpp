@@ -19,25 +19,41 @@
  */
 #include "AP_Filesystem.h"
 #include "AP_Filesystem_Sys.h"
+
+#if AP_FILESYSTEM_SYS_ENABLED
+
 #include <AP_Math/AP_Math.h>
 #include <AP_CANManager/AP_CANManager.h>
 #include <AP_Scheduler/AP_Scheduler.h>
+#include <AP_Common/ExpandingString.h>
 
 extern const AP_HAL::HAL& hal;
 
 struct SysFileList {
     const char* name;
-    uint32_t filesize; 
 };
 
 static const SysFileList sysfs_file_list[] = {
-    {"threads.txt", 1024},
-    {"tasks.txt", 6500},
-    {"dma.txt", 1024},
+    {"threads.txt"},
+    {"tasks.txt"},
+    {"dma.txt"},
+    {"memory.txt"},
+    {"uarts.txt"},
+    {"timers.txt"},
 #if HAL_MAX_CAN_PROTOCOL_DRIVERS
-    {"can_log.txt", 1024},
-    {"can0_stats.txt", 1024},
-    {"can1_stats.txt", 1024},
+    {"can_log.txt"},
+#endif
+#if HAL_NUM_CAN_IFACES > 0
+    {"can0_stats.txt"},
+    {"can1_stats.txt"},
+#endif
+#if !defined(HAL_BOOTLOADER_BUILD) && (defined(STM32F7) || defined(STM32H7))
+    {"persistent.parm"},
+#endif
+    {"crash_dump.bin"},
+    {"storage.bin"},
+#if AP_FILESYSTEM_SYS_FLASH_ENABLED
+    {"flash.bin"},
 #endif
 };
 
@@ -50,7 +66,7 @@ int8_t AP_Filesystem_Sys::file_in_sysfs(const char *fname) {
     return -1;
 }
 
-int AP_Filesystem_Sys::open(const char *fname, int flags)
+int AP_Filesystem_Sys::open(const char *fname, int flags, bool allow_absolute_paths)
 {
     if ((flags & O_ACCMODE) != O_RDONLY) {
         errno = EROFS;
@@ -67,68 +83,90 @@ int AP_Filesystem_Sys::open(const char *fname, int flags)
         return -1;
     }
     struct rfile &r = file[idx];
-    r.data = new file_data;
-    if (r.data == nullptr) {
+    r.str = NEW_NOTHROW ExpandingString;
+    if (r.str == nullptr) {
         errno = ENOMEM;
         return -1;
     }
 
     // This ensure that whenever new sys file is added its also added to list above
     int8_t pos = file_in_sysfs(fname);
-    uint32_t max_size = 0;
-    if (pos >= 0) {
-        max_size = sysfs_file_list[pos].filesize;
-    } else {
+    if (pos < 0) {
+        delete r.str;
+        r.str = nullptr;
         errno = ENOENT;
         return -1;
     }
 
     if (strcmp(fname, "threads.txt") == 0) {
-        r.data->data = (char *)malloc(max_size);
-        if (r.data->data) {
-            r.data->length = hal.util->thread_info(r.data->data, max_size);
-        }
+        hal.util->thread_info(*r.str);
     }
+#if AP_SCHEDULER_ENABLED
     if (strcmp(fname, "tasks.txt") == 0) {
-        r.data->data = (char *)malloc(max_size);
-        if (r.data->data) {
-            r.data->length = AP::scheduler().task_info(r.data->data, max_size);
-            if (r.data->length == 0) { // the feature may be disabled
-                free(r.data->data);
-                r.data->data = nullptr;
-            }
-        }
+        AP::scheduler().task_info(*r.str);
     }
+#endif
     if (strcmp(fname, "dma.txt") == 0) {
-        r.data->data = (char *)malloc(max_size);
-        if (r.data->data) {
-            r.data->length = hal.util->dma_info(r.data->data, max_size);
-        }
+        hal.util->dma_info(*r.str);
     }
-#if HAL_MAX_CAN_PROTOCOL_DRIVERS
-    int8_t can_stats_num = -1;
+    if (strcmp(fname, "memory.txt") == 0) {
+        hal.util->mem_info(*r.str);
+    }
+#if HAL_UART_STATS_ENABLED
+    if (strcmp(fname, "uarts.txt") == 0) {
+        hal.util->uart_info(*r.str);
+    }
+#endif
+    if (strcmp(fname, "timers.txt") == 0) {
+        hal.util->timer_info(*r.str);
+    }
+#if HAL_CANMANAGER_ENABLED
     if (strcmp(fname, "can_log.txt") == 0) {
-        r.data->data = (char *)malloc(max_size);
-        if (r.data->data) {
-            r.data->length = AP::can().log_retrieve(r.data->data, max_size);
-        }
-    } else if (strcmp(fname, "can0_stats.txt") == 0) {
+        AP::can().log_retrieve(*r.str);
+    }
+#endif
+#if HAL_NUM_CAN_IFACES > 0
+    int8_t can_stats_num = -1;
+    if (strcmp(fname, "can0_stats.txt") == 0) {
         can_stats_num = 0;
     } else if (strcmp(fname, "can1_stats.txt") == 0) {
         can_stats_num = 1;
     }
     if (can_stats_num != -1 && can_stats_num < HAL_NUM_CAN_IFACES) {
         if (hal.can[can_stats_num] != nullptr) {
-            r.data->data = (char *)malloc(max_size);
-            if (r.data->data) {
-                r.data->length = hal.can[can_stats_num]->get_stats(r.data->data, max_size);
-            }
+            hal.can[can_stats_num]->get_stats(*r.str);
         }
     }
 #endif
-    if (r.data->data == nullptr) {
-        delete r.data;
-        errno = ENOENT;
+    if (strcmp(fname, "persistent.parm") == 0) {
+        hal.util->load_persistent_params(*r.str);
+    }
+#if AP_CRASHDUMP_ENABLED
+    if (strcmp(fname, "crash_dump.bin") == 0) {
+        r.str->set_buffer((char*)hal.util->last_crash_dump_ptr(), hal.util->last_crash_dump_size(), hal.util->last_crash_dump_size());
+    }
+#endif
+    if (strcmp(fname, "storage.bin") == 0) {
+        // we don't want to store the contents of storage.bin
+        // we read directly from the storage driver
+        void *ptr = nullptr;
+        size_t size = 0;
+        if (hal.storage->get_storage_ptr(ptr, size)) {
+            r.str->set_buffer((char*)ptr, size, size);
+        }
+    }
+#if AP_FILESYSTEM_SYS_FLASH_ENABLED
+    if (strcmp(fname, "flash.bin") == 0) {
+        void *ptr = (void*)0x08000000;
+        const size_t size = BOARD_FLASH_SIZE*1024;
+        r.str->set_buffer((char*)ptr, size, size);
+    }
+#endif
+    
+    if (r.str->get_length() == 0) {
+        errno = r.str->has_failed_allocation()?ENOMEM:ENOENT;
+        delete r.str;
+        r.str = nullptr;
         return -1;
     }
     r.file_ofs = 0;
@@ -144,8 +182,8 @@ int AP_Filesystem_Sys::close(int fd)
     }
     struct rfile &r = file[fd];
     r.open = false;
-    free(r.data->data);
-    delete r.data;
+    delete r.str;
+    r.str = nullptr;
     return 0;
 }
 
@@ -156,8 +194,9 @@ int32_t AP_Filesystem_Sys::read(int fd, void *buf, uint32_t count)
         return -1;
     }
     struct rfile &r = file[fd];
-    count = MIN(count, r.data->length - r.file_ofs);
-    memcpy(buf, &r.data->data[r.file_ofs], count);
+    count = MIN(count, r.str->get_length() - r.file_ofs);
+    memcpy(buf, &r.str->get_string()[r.file_ofs], count);
+
     r.file_ofs += count;
     return count;
 }
@@ -171,10 +210,10 @@ int32_t AP_Filesystem_Sys::lseek(int fd, int32_t offset, int seek_from)
     struct rfile &r = file[fd];
     switch (seek_from) {
     case SEEK_SET:
-        r.file_ofs = MIN(offset, int32_t(r.data->length));
+        r.file_ofs = MIN(offset, int32_t(r.str->get_length()));
         break;
     case SEEK_CUR:
-        r.file_ofs = MIN(r.data->length, offset+r.file_ofs);
+        r.file_ofs = MIN(r.str->get_length(), offset+r.file_ofs);
         break;
     case SEEK_END:
         errno = EINVAL;
@@ -190,7 +229,7 @@ void *AP_Filesystem_Sys::opendir(const char *pathname)
         errno = ENOENT;
         return nullptr;
     }
-    DirReadTracker *dtracker = new DirReadTracker;
+    DirReadTracker *dtracker = NEW_NOTHROW DirReadTracker;
     if (dtracker == nullptr) {
         errno = ENOMEM;
         return nullptr;
@@ -205,7 +244,9 @@ struct dirent *AP_Filesystem_Sys::readdir(void *dirp)
         // we have reached end of list
         return nullptr;
     }
+#if AP_FILESYSTEM_HAVE_DIRENT_DTYPE
     dtracker->curr_file.d_type = DT_REG;
+#endif
     size_t max_length = ARRAY_SIZE(dtracker->curr_file.d_name);
     strncpy_noterm(dtracker->curr_file.d_name, sysfs_file_list[dtracker->file_offset].name, max_length);
     dtracker->file_offset++;
@@ -242,6 +283,18 @@ int AP_Filesystem_Sys::stat(const char *pathname, struct stat *stbuf)
         errno = ENOENT;
         return -1;
     }
-    stbuf->st_size = sysfs_file_list[pos].filesize;
+    // give a fixed size for stat. It is too expensive to
+    // read every file for a directory listing
+    if (strcmp(pathname_noslash, "storage.bin") == 0) {
+        stbuf->st_size = HAL_STORAGE_SIZE;
+#if AP_CRASHDUMP_ENABLED
+    } else if (strcmp(pathname_noslash, "crash_dump.bin") == 0) {
+        stbuf->st_size = hal.util->last_crash_dump_size();
+#endif
+    } else {
+        stbuf->st_size = 100000;
+    }
     return 0;
 }
+
+#endif  // AP_FILESYSTEM_SYS_ENABLED

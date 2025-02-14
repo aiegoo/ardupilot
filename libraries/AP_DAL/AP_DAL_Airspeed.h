@@ -4,8 +4,6 @@
 
 #include <AP_Airspeed/AP_Airspeed.h>
 
-#include <AP_Vehicle/AP_Vehicle_Type.h>
-
 class AP_DAL_Airspeed {
 public:
 
@@ -14,6 +12,10 @@ public:
     // return health status of sensor
     bool healthy(uint8_t i) const {
         return _RASI[i].healthy;
+    }
+    // return health status of primary sensor
+    bool healthy() const {
+        return healthy(get_primary());
     }
 
     // return true if airspeed is enabled, and airspeed use is set

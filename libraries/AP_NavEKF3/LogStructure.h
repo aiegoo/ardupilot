@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AP_Logger/LogStructure.h>
+#include <AP_AHRS/AP_AHRS_config.h>
 
 #define LOG_IDS_FROM_NAVEKF3 \
     LOG_XKF0_MSG, \
@@ -103,14 +104,17 @@ struct PACKED log_XKF1 {
 // @Field: AX: Estimated accelerometer X bias
 // @Field: AY: Estimated accelerometer Y bias
 // @Field: AZ: Estimated accelerometer Z bias
-// @Field: VWN: Estimated wind velocity (North component)
-// @Field: VWE: Estimated wind velocity (East component)
+// @Field: VWN: Estimated wind velocity (moving-to-North component)
+// @Field: VWE: Estimated wind velocity (moving-to-East component)
 // @Field: MN: Magnetic field strength (North component)
 // @Field: ME: Magnetic field strength (East component)
 // @Field: MD: Magnetic field strength (Down component)
 // @Field: MX: Magnetic field strength (body X-axis)
 // @Field: MY: Magnetic field strength (body Y-axis)
 // @Field: MZ: Magnetic field strength (body Z-axis)
+// @Field: IDX: Innovation in vehicle drag acceleration (X-axis component)
+// @Field: IDY: Innovation in vehicle drag acceleration (Y-axis component)
+// @Field: IS: Innovation in vehicle sideslip
 struct PACKED log_XKF2 {
     LOG_PACKET_HEADER;
     uint64_t time_us;
@@ -126,6 +130,9 @@ struct PACKED log_XKF2 {
     int16_t magX;
     int16_t magY;
     int16_t magZ;
+    float innovDragX;
+    float innovDragY;
+    float innovSideslip;
 };
 
 
@@ -167,7 +174,7 @@ struct PACKED log_XKF3 {
 
 
 // @LoggerMessage: XKF4
-// @Description: EKF3 variances
+// @Description: EKF3 variances.  SV, SP, SH and SM are probably best described as 'Squared Innovation Test Ratios' where values <1 tells us the measurement was accepted and >1 tells us it was rejected. They represent the square of the (innovation / maximum allowed innovation) where the innovation is the difference between predicted and measured value and the maximum allowed innovation is determined from the uncertainty of the measurement, uncertainty of the prediction and scaled using the number of standard deviations set by the innovation gate parameter for that measurement, eg EK3_MAG_I_GATE, EK3_HGT_I_GATE, etc
 // @Field: TimeUS: Time since system startup
 // @Field: C: EKF3 core this data is for
 // @Field: SV: Square root of the velocity variance
@@ -176,11 +183,12 @@ struct PACKED log_XKF3 {
 // @Field: SM: Magnetic field variance
 // @Field: SVT: Square root of the total airspeed variance
 // @Field: errRP: Filtered error in roll/pitch estimate
-// @Field: OFN: Most recent position recent magnitude (North component)
-// @Field: OFE: Most recent position recent magnitude (East component)
+// @Field: OFN: Most recent position reset (North component)
+// @Field: OFE: Most recent position reset (East component)
 // @Field: FS: Filter fault status
-// @Field: TS: Filter timeout status
+// @Field: TS: Filter timeout status bitmask (0:position measurement, 1:velocity measurement, 2:height measurement, 3:magnetometer measurement, 4:airspeed measurement, 5:drag measurement)
 // @Field: SS: Filter solution status
+// @FieldBitmaskEnum: SS: NavFilterStatusBit
 // @Field: GPS: Filter GPS status
 // @Field: PI: Primary core index
 struct PACKED log_XKF4 {
@@ -193,8 +201,8 @@ struct PACKED log_XKF4 {
     int16_t sqrtvarM;
     int16_t sqrtvarVT;
     float   tiltErr;
-    int8_t  offsetNorth;
-    int8_t  offsetEast;
+    float  offsetNorth;
+    float  offsetEast;
     uint16_t faults;
     uint8_t timeouts;
     uint32_t solution;
@@ -337,6 +345,10 @@ struct PACKED log_XKQ {
 // @Field: BI: barometer selection index
 // @Field: GI: GPS selection index
 // @Field: AI: airspeed selection index
+// @Field: SS: Source Set (primary=0/secondary=1/tertiary=2)
+// @Field: GPS_GTA: GPS good to align
+// @Field: GPS_CHK_WAIT: Waiting for GPS checks to pass
+// @Field: MAG_FUSION: Magnetometer fusion (0=not fusing/1=fuse yaw/2=fuse mag)
 struct PACKED log_XKFS {
     LOG_PACKET_HEADER;
     uint64_t time_us;
@@ -345,6 +357,10 @@ struct PACKED log_XKFS {
     uint8_t baro_index;
     uint8_t gps_index;
     uint8_t airspeed_index;
+    uint8_t source_set;
+    uint8_t gps_good_to_align;
+    uint8_t wait_for_gps_checks;
+    uint8_t mag_fusion;
 };
 
 // @LoggerMessage: XKTV
@@ -412,102 +428,35 @@ struct PACKED log_XKV {
     float v11;
 };
 
-
-// @LoggerMessage: XKY0
-// @Description: EKF3 Yaw Estimator States
-// @Field: TimeUS: Time since system startup
-// @Field: C: EKF3 core this data is for
-// @Field: YC: GSF yaw estimate (rad)
-// @Field: YCS: GSF yaw estimate 1-Sigma uncertainty (rad)
-// @Field: Y0: Yaw estimate from individual EKF filter 0 (rad)
-// @Field: Y1: Yaw estimate from individual EKF filter 1 (rad)
-// @Field: Y2: Yaw estimate from individual EKF filter 2 (rad)
-// @Field: Y3: Yaw estimate from individual EKF filter 3 (rad)
-// @Field: Y4: Yaw estimate from individual EKF filter 4 (rad)
-// @Field: W0: Weighting applied to yaw estimate from individual EKF filter 0
-// @Field: W1: Weighting applied to yaw estimate from individual EKF filter 1
-// @Field: W2: Weighting applied to yaw estimate from individual EKF filter 2
-// @Field: W3: Weighting applied to yaw estimate from individual EKF filter 3
-// @Field: W4: Weighting applied to yaw estimate from individual EKF filter 4
-struct PACKED log_XKY0 {
-    LOG_PACKET_HEADER;
-    uint64_t time_us;
-    uint8_t core;
-    float yaw_composite;
-    float yaw_composite_variance;
-    float yaw0;
-    float yaw1;
-    float yaw2;
-    float yaw3;
-    float yaw4;
-    float wgt0;
-    float wgt1;
-    float wgt2;
-    float wgt3;
-    float wgt4;
-};
-
-
-// @LoggerMessage: XKY1
-// @Description: EKF3 Yaw Estimator Innovations
-// @Field: TimeUS: Time since system startup
-// @Field: C: EKF3 core this data is for
-// @Field: IVN0: North velocity innovation from individual EKF filter 0 (m/s)
-// @Field: IVN1: North velocity innovation from individual EKF filter 1 (m/s)
-// @Field: IVN2: North velocity innovation from individual EKF filter 2 (m/s)
-// @Field: IVN3: North velocity innovation from individual EKF filter 3 (m/s)
-// @Field: IVN4: North velocity innovation from individual EKF filter 4 (m/s)
-// @Field: IVE0: East velocity innovation from individual EKF filter 0 (m/s)
-// @Field: IVE1: East velocity innovation from individual EKF filter 1 (m/s)
-// @Field: IVE2: East velocity innovation from individual EKF filter 2 (m/s)
-// @Field: IVE3: East velocity innovation from individual EKF filter 3 (m/s)
-// @Field: IVE4: East velocity innovation from individual EKF filter 4 (m/s)
-struct PACKED log_XKY1 {
-    LOG_PACKET_HEADER;
-    uint64_t time_us;
-    uint8_t core;
-    float ivn0;
-    float ivn1;
-    float ivn2;
-    float ivn3;
-    float ivn4;
-    float ive0;
-    float ive1;
-    float ive2;
-    float ive3;
-    float ive4;
-};
-
-
+#if HAL_NAVEKF3_AVAILABLE
 #define LOG_STRUCTURE_FROM_NAVEKF3        \
     { LOG_XKF0_MSG, sizeof(log_XKF0), \
-      "XKF0","QBBccCCcccccccc","TimeUS,C,ID,rng,innov,SIV,TR,BPN,BPE,BPD,OFH,OFL,OFN,OFE,OFD", "s#-m---mmmmmmmm", "F--B---BBBBBBBB" }, \
+      "XKF0","QBBccCCcccccccc","TimeUS,C,ID,rng,innov,SIV,TR,BPN,BPE,BPD,OFH,OFL,OFN,OFE,OFD", "s#-m---mmmmmmmm", "F--B---BBBBBBBB" , true }, \
     { LOG_XKF1_MSG, sizeof(log_XKF1), \
-      "XKF1","QBccCfffffffccce","TimeUS,C,Roll,Pitch,Yaw,VN,VE,VD,dPD,PN,PE,PD,GX,GY,GZ,OH", "s#ddhnnnnmmmkkkm", "F-BBB0000000BBBB" }, \
+      "XKF1","QBccCfffffffccce","TimeUS,C,Roll,Pitch,Yaw,VN,VE,VD,dPD,PN,PE,PD,GX,GY,GZ,OH", "s#ddhnnnnmmmkkkm", "F-BBB0000000BBBB" , true }, \
     { LOG_XKF2_MSG, sizeof(log_XKF2), \
-      "XKF2","QBccccchhhhhh","TimeUS,C,AX,AY,AZ,VWN,VWE,MN,ME,MD,MX,MY,MZ", "s#---nnGGGGGG", "F----BBCCCCCC" }, \
+      "XKF2","QBccccchhhhhhfff","TimeUS,C,AX,AY,AZ,VWN,VWE,MN,ME,MD,MX,MY,MZ,IDX,IDY,IS", "s#---nnGGGGGGoor", "F----BBCCCCCC000" , true }, \
     { LOG_XKF3_MSG, sizeof(log_XKF3), \
-      "XKF3","QBcccccchhhccff","TimeUS,C,IVN,IVE,IVD,IPN,IPE,IPD,IMX,IMY,IMZ,IYAW,IVT,RErr,ErSc", "s#nnnmmmGGG??--", "F-BBBBBBCCCBB00" }, \
+      "XKF3","QBcccccchhhccff","TimeUS,C,IVN,IVE,IVD,IPN,IPE,IPD,IMX,IMY,IMZ,IYAW,IVT,RErr,ErSc", "s#nnnmmmGGGd?--", "F-BBBBBBCCCBB00" , true }, \
     { LOG_XKF4_MSG, sizeof(log_XKF4), \
-      "XKF4","QBcccccfbbHBIHb","TimeUS,C,SV,SP,SH,SM,SVT,errRP,OFN,OFE,FS,TS,SS,GPS,PI", "s#------??-----", "F-------??-----" }, \
+      "XKF4","QBcccccfffHBIHb","TimeUS,C,SV,SP,SH,SM,SVT,errRP,OFN,OFE,FS,TS,SS,GPS,PI", "s#------mm-----", "F-------??-----" , true }, \
     { LOG_XKF5_MSG, sizeof(log_XKF5), \
-      "XKF5","QBBhhhcccCCfff","TimeUS,C,NI,FIX,FIY,AFI,HAGL,offset,RI,rng,Herr,eAng,eVel,ePos", "s#----m???mrnm", "F-----BBBBB000" }, \
+      "XKF5","QBBhhhcccCCfff","TimeUS,C,NI,FIX,FIY,AFI,HAGL,offset,RI,rng,Herr,eAng,eVel,ePos", "s#----m???mrnm", "F-----BBBBB000" , true }, \
     { LOG_XKFD_MSG, sizeof(log_XKFD), \
-      "XKFD","QBffffff","TimeUS,C,IX,IY,IZ,IVX,IVY,IVZ", "s#------", "F-------" }, \
+      "XKFD","QBffffff","TimeUS,C,IX,IY,IZ,IVX,IVY,IVZ", "s#------", "F-------" , true }, \
     { LOG_XKFM_MSG, sizeof(log_XKFM),   \
-      "XKFM", "QBBffff", "TimeUS,C,OGNM,GLR,ALR,GDR,ADR", "s------", "F------"}, \
+      "XKFM", "QBBffff", "TimeUS,C,OGNM,GLR,ALR,GDR,ADR", "s#-----", "F------", true }, \
     { LOG_XKFS_MSG, sizeof(log_XKFS), \
-      "XKFS","QBBBBB","TimeUS,C,MI,BI,GI,AI", "s#----", "F-----" }, \
-    { LOG_XKQ_MSG, sizeof(log_XKQ), "XKQ", QUAT_FMT, QUAT_LABELS, QUAT_UNITS, QUAT_MULTS }, \
+      "XKFS","QBBBBBBBBB","TimeUS,C,MI,BI,GI,AI,SS,GPS_GTA,GPS_CHK_WAIT,MAG_FUSION", "s#--------", "F---------" , true }, \
+    { LOG_XKQ_MSG, sizeof(log_XKQ), "XKQ", "QBffff", "TimeUS,C,Q1,Q2,Q3,Q4", "s#????", "F-????" , true }, \
     { LOG_XKT_MSG, sizeof(log_XKT),   \
-      "XKT", "QBIffffffff", "TimeUS,C,Cnt,IMUMin,IMUMax,EKFMin,EKFMax,AngMin,AngMax,VMin,VMax", "s#sssssssss", "F-000000000"}, \
+      "XKT", "QBIffffffff", "TimeUS,C,Cnt,IMUMin,IMUMax,EKFMin,EKFMax,AngMin,AngMax,VMin,VMax", "s#sssssssss", "F-000000000", true }, \
     { LOG_XKTV_MSG, sizeof(log_XKTV),                         \
-      "XKTV", "QBff", "TimeUS,C,TVS,TVD", "s#rr", "F-00"}, \
-    { LOG_XKY0_MSG, sizeof(log_XKY0),                         \
-      "XKY0", "QBffffffffffff", "TimeUS,C,YC,YCS,Y0,Y1,Y2,Y3,Y4,W0,W1,W2,W3,W4", "s#rrrrrrr-----", "F-000000000000"}, \
-    { LOG_XKY1_MSG, sizeof(log_XKY1),                         \
-      "XKY1", "QBffffffffff", "TimeUS,C,IVN0,IVN1,IVN2,IVN3,IVN4,IVE0,IVE1,IVE2,IVE3,IVE4", "s#nnnnnnnnnn", "F-0000000000"}, \
+      "XKTV", "QBff", "TimeUS,C,TVS,TVD", "s#rr", "F-00", true }, \
     { LOG_XKV1_MSG, sizeof(log_XKV), \
-      "XKV1","QBffffffffffff","TimeUS,C,V00,V01,V02,V03,V04,V05,V06,V07,V08,V09,V10,V11", "s#------------", "F-------------" }, \
+      "XKV1","QBffffffffffff","TimeUS,C,V00,V01,V02,V03,V04,V05,V06,V07,V08,V09,V10,V11", "s#------------", "F-------------" , true }, \
     { LOG_XKV2_MSG, sizeof(log_XKV), \
-      "XKV2","QBffffffffffff","TimeUS,C,V12,V13,V14,V15,V16,V17,V18,V19,V20,V21,V22,V23", "s#------------", "F-------------" },
+      "XKV2","QBffffffffffff","TimeUS,C,V12,V13,V14,V15,V16,V17,V18,V19,V20,V21,V22,V23", "s#------------", "F-------------" , true },
+#else
+  #define LOG_STRUCTURE_FROM_NAVEKF3
+#endif

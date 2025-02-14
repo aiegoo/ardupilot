@@ -1,3 +1,7 @@
+#include <AP_Logger/AP_Logger_config.h>
+
+#if HAL_LOGGING_ENABLED
+
 #include "AP_NavEKF2.h"
 #include "AP_NavEKF2_core.h"
 
@@ -23,7 +27,7 @@ void NavEKF2_core::Log_Write_NKF1(uint64_t time_us) const
     if (!getOriginLLH(originLLH)) {
         originLLH.alt = 0;
     }
-    const struct log_EKF1 pkt{
+    const struct log_NKF1 pkt{
         LOG_PACKET_HEADER_INIT(LOG_NKF1_MSG),
         time_us : time_us,
         core    : DAL_CORE(core_index),
@@ -119,17 +123,20 @@ void NavEKF2_core::Log_Write_NKF4(uint64_t time_us) const
     float tasVar = 0;
     Vector2f offset;
     uint16_t _faultStatus=0;
-    uint8_t timeoutStatus=0;
+    const uint8_t timeoutStatus =
+        posTimeout<<0 |
+        velTimeout<<1 |
+        hgtTimeout<<2 |
+        magTimeout<<3 |
+        tasTimeout<<4;
+
     nav_filter_status solutionStatus {};
     nav_gps_status gpsStatus {};
     getVariances(velVar, posVar, hgtVar, magVar, tasVar, offset);
-    float tempVar = fmaxf(fmaxf(magVar.x,magVar.y),magVar.z);
+    ftype tempVar = fmaxF(fmaxF(magVar.x,magVar.y),magVar.z);
     getFilterFaults(_faultStatus);
-    getFilterTimeouts(timeoutStatus);
     getFilterStatus(solutionStatus);
     getFilterGpsStatus(gpsStatus);
-    float tiltError;
-    getTiltError(tiltError);
     const struct log_NKF4 pkt4{
         LOG_PACKET_HEADER_INIT(LOG_NKF4_MSG),
         time_us : time_us,
@@ -139,9 +146,9 @@ void NavEKF2_core::Log_Write_NKF4(uint64_t time_us) const
         sqrtvarH : (int16_t)(100*hgtVar),
         sqrtvarM : (int16_t)(100*tempVar),
         sqrtvarVT : (int16_t)(100*tasVar),
-        tiltErr : (float)tiltError,
-        offsetNorth : (int8_t)(offset.x),
-        offsetEast : (int8_t)(offset.y),
+        tiltErr : float(tiltErrFilt),  // tilt error convergence metric
+        offsetNorth : offset.x,
+        offsetEast : offset.y,
         faults : _faultStatus,
         timeouts : (uint8_t)(timeoutStatus),
         solution : (uint32_t)(solutionStatus.value),
@@ -166,15 +173,15 @@ void NavEKF2_core::Log_Write_NKF5(uint64_t time_us) const
         normInnov : (uint8_t)(MIN(100*MAX(flowTestRatio[0],flowTestRatio[1]),255)),  // normalised innovation variance ratio for optical flow observations fused by the main nav filter
         FIX : (int16_t)(1000*innovOptFlow[0]),  // optical flow LOS rate vector innovations from the main nav filter
         FIY : (int16_t)(1000*innovOptFlow[1]),  // optical flow LOS rate vector innovations from the main nav filter
-        AFI : (int16_t)(1000*norm(auxFlowObsInnov.x,auxFlowObsInnov.y)),  // optical flow LOS rate innovation from terrain offset estimator
-        HAGL : (int16_t)(100*(terrainState - stateStruct.position.z)),  // height above ground level
+        AFI : (int16_t)(1000 * auxFlowObsInnov.length()),  // optical flow LOS rate innovation from terrain offset estimator
+        HAGL : float_to_int16(100*(terrainState - stateStruct.position.z)),  // height above ground level
         offset : (int16_t)(100*terrainState),  // // estimated vertical position of the terrain relative to the nav filter zero datum
         RI : (int16_t)(100*innovRng),  // range finder innovations
         meaRng : (uint16_t)(100*rangeDataDelayed.rng),  // measured range
-        errHAGL : (uint16_t)(100*sqrtf(Popt)),  // filter ground offset state error
-        angErr : outputTrackError.x,
-        velErr : outputTrackError.y,
-        posErr : outputTrackError.z
+        errHAGL : (uint16_t)(100*sqrtF(Popt)),  // filter ground offset state error
+        angErr : float(outputTrackError.x),
+        velErr : float(outputTrackError.y),
+        posErr : float(outputTrackError.z)
     };
     AP::logger().WriteBlock(&pkt5, sizeof(pkt5));
 }
@@ -184,7 +191,7 @@ void NavEKF2_core::Log_Write_Quaternion(uint64_t time_us) const
     // log quaternion
     Quaternion quat;
     getQuaternion(quat);
-    const struct log_Quaternion pktq1{
+    const struct log_NKQ pktq1{
         LOG_PACKET_HEADER_INIT(LOG_NKQ_MSG),
         time_us : time_us,
         core    : DAL_CORE(core_index),
@@ -196,6 +203,7 @@ void NavEKF2_core::Log_Write_Quaternion(uint64_t time_us) const
     AP::logger().WriteBlock(&pktq1, sizeof(pktq1));
 }
 
+#if AP_BEACON_ENABLED
 void NavEKF2_core::Log_Write_Beacon(uint64_t time_us)
 {
     if (core_index != frontend->primary) {
@@ -224,15 +232,15 @@ void NavEKF2_core::Log_Write_Beacon(uint64_t time_us)
         return;
     }
 
-    struct log_RngBcnDebug pkt10 = {
-        LOG_PACKET_HEADER_INIT(LOG_NKF10_MSG),
+    struct log_NKF0 pkt0 = {
+        LOG_PACKET_HEADER_INIT(LOG_NKF0_MSG),
         time_us : time_us,
         core    : DAL_CORE(core_index),
         ID : rngBcnFuseDataReportIndex,
         rng : (int16_t)(100*report.rng),
         innov : (int16_t)(100*report.innov),
         sqrtInnovVar : (uint16_t)(100*safe_sqrt(report.innovVar)),
-        testRatio : (uint16_t)(100*constrain_float(report.testRatio,0.0f,650.0f)),
+        testRatio : (uint16_t)(100*constrain_ftype(report.testRatio,0.0f,650.0f)),
         beaconPosN : (int16_t)(100*report.beaconPosNED.x),
         beaconPosE : (int16_t)(100*report.beaconPosNED.y),
         beaconPosD : (int16_t)(100*report.beaconPosNED.z),
@@ -242,14 +250,14 @@ void NavEKF2_core::Log_Write_Beacon(uint64_t time_us)
         posE : 0,
         posD : 0
     };
-    AP::logger().WriteBlock(&pkt10, sizeof(pkt10));
+    AP::logger().WriteBlock(&pkt0, sizeof(pkt0));
     rngBcnFuseDataReportIndex++;
 }
+#endif  // AP_BEACON_ENABLED
 
 void NavEKF2_core::Log_Write_Timing(uint64_t time_us)
 {
     // log EKF timing statistics every 5s
-    static uint32_t lastTimingLogTime_ms = 0;
     if (AP::dal().millis() - lastTimingLogTime_ms <= 5000) {
         return;
     }
@@ -312,8 +320,10 @@ void NavEKF2_core::Log_Write(uint64_t time_us)
     Log_Write_Quaternion(time_us);
     Log_Write_GSF(time_us);
 
+#if AP_BEACON_ENABLED
     // write range beacon fusion debug packet if the range value is non-zero
     Log_Write_Beacon(time_us);
+#endif
 
     Log_Write_Timing(time_us);
 }
@@ -323,51 +333,7 @@ void NavEKF2_core::Log_Write_GSF(uint64_t time_us) const
     if (yawEstimator == nullptr) {
         return;
     }
-
-    float yaw_composite;
-    float yaw_composite_variance;
-    float yaw[N_MODELS_EKFGSF];
-    float ivn[N_MODELS_EKFGSF];
-    float ive[N_MODELS_EKFGSF];
-    float wgt[N_MODELS_EKFGSF];
-
-    if (!yawEstimator->getLogData(yaw_composite, yaw_composite_variance, yaw, ivn, ive, wgt)) {
-        return;
-    }
-
-    const struct log_NKY0 nky0{
-        LOG_PACKET_HEADER_INIT(LOG_NKY0_MSG),
-        time_us                 : time_us,
-        core                    : DAL_CORE(core_index),
-        yaw_composite           : yaw_composite,
-        yaw_composite_variance  : sqrtf(MAX(yaw_composite_variance, 0.0f)),
-        yaw0                    : yaw[0],
-        yaw1                    : yaw[1],
-        yaw2                    : yaw[2],
-        yaw3                    : yaw[3],
-        yaw4                    : yaw[4],
-        wgt0                    : wgt[0],
-        wgt1                    : wgt[1],
-        wgt2                    : wgt[2],
-        wgt3                    : wgt[3],
-        wgt4                    : wgt[4],
-    };
-    AP::logger().WriteBlock(&nky0, sizeof(nky0));
-
-    const struct log_NKY1 nky1{
-        LOG_PACKET_HEADER_INIT(LOG_NKY1_MSG),
-        time_us                 : time_us,
-        core                    : DAL_CORE(core_index),
-        ivn0                    : ivn[0],
-        ivn1                    : ivn[1],
-        ivn2                    : ivn[2],
-        ivn3                    : ivn[3],
-        ivn4                    : ivn[4],
-        ive0                    : ive[0],
-        ive1                    : ive[1],
-        ive2                    : ive[2],
-        ive3                    : ive[3],
-        ive4                    : ive[4],
-    };
-    AP::logger().WriteBlock(&nky1, sizeof(nky1));
+    yawEstimator->Log_Write(time_us, LOG_NKY0_MSG, LOG_NKY1_MSG, DAL_CORE(core_index));
 }
+
+#endif  // HAL_LOGGING_ENABLED

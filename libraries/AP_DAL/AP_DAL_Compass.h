@@ -4,8 +4,6 @@
 
 #include <AP_Compass/AP_Compass.h>
 
-#include <AP_Vehicle/AP_Vehicle_Type.h>
-
 class AP_DAL_Compass {
 public:
 
@@ -38,6 +36,10 @@ public:
         return _RMGH.declination;
     }
 
+    bool available() const {
+        return _RMGH.available;
+    }
+
     // return the number of enabled sensors
     uint8_t get_num_enabled(void) const { return _RMGH.num_enabled; }
 
@@ -52,6 +54,9 @@ public:
 
     // check if the compasses are pointing in the same direction
     bool consistent() const { return _RMGH.consistent; }
+
+    // returns first usable compass
+    uint8_t get_first_usable() const { return _RMGH.first_usable; }
 
     // AP_DAL methods:
     AP_DAL_Compass();

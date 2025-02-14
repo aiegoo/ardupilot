@@ -13,10 +13,15 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <AP_HAL/AP_HAL.h>
 #include "AP_Filesystem.h"
 
+extern const AP_HAL::HAL& hal;
+
 /*
-  load a full file. Use delete to free the data
+  Load a file's contents into memory. Returned object must be `delete`d to free
+  the data. The data is guaranteed to be null-terminated such that it can be
+  treated as a string.
 */
 FileData *AP_Filesystem_Backend::load_file(const char *filename)
 {
@@ -24,11 +29,12 @@ FileData *AP_Filesystem_Backend::load_file(const char *filename)
     if (stat(filename, &st) != 0) {
         return nullptr;
     }
-    FileData *fd = new FileData(this);
+    FileData *fd = NEW_NOTHROW FileData(this);
     if (fd == nullptr) {
         return nullptr;
     }
-    void *data = malloc(st.st_size);
+    // add one byte for null termination; ArduPilot's malloc will zero it.
+    void *data = malloc(st.st_size+1);
     if (data == nullptr) {
         delete fd;
         return nullptr;
@@ -46,7 +52,7 @@ FileData *AP_Filesystem_Backend::load_file(const char *filename)
         return nullptr;
     }
     close(d);
-    fd->length = st.st_size;
+    fd->length = st.st_size; // length does not include our added termination
     fd->data = (const uint8_t *)data;
     return fd;
 }
@@ -62,6 +68,15 @@ void AP_Filesystem_Backend::unload_file(FileData *fd)
     }
 }
 
+// return true if file operations are allowed
+bool AP_Filesystem_Backend::file_op_allowed(void) const
+{
+    if (!hal.util->get_soft_armed() || !hal.scheduler->in_main_thread()) {
+        return true;
+    }
+    return false;
+}
+
 /*
   destructor for FileData
  */
@@ -71,3 +86,4 @@ FileData::~FileData()
         ((AP_Filesystem_Backend *)backend)->unload_file(this);
     }
 }
+

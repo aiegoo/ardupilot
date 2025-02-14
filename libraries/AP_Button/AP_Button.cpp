@@ -15,8 +15,12 @@
 
 
 #include "AP_Button.h"
+
+#if HAL_BUTTON_ENABLED
+
 #include <GCS_MAVLink/GCS_MAVLink.h>
 #include <GCS_MAVLink/GCS.h>
+#include <RC_Channel/RC_Channel.h>
 
 // very crude debounce method
 #define DEBOUNCE_MS 50
@@ -36,28 +40,28 @@ const AP_Param::GroupInfo AP_Button::var_info[] = {
 
     // @Param: PIN1
     // @DisplayName: First button Pin
-    // @Description: Digital pin number for first button input. 
+    // @Description: Digital pin number for first button input.  Some common values are given, but see the Wiki's "GPIOs" page for how to determine the pin number for a given autopilot.
     // @User: Standard
     // @Values: -1:Disabled,50:AUXOUT1,51:AUXOUT2,52:AUXOUT3,53:AUXOUT4,54:AUXOUT5,55:AUXOUT6
     AP_GROUPINFO("PIN1",  1, AP_Button, pin[0], -1),
 
     // @Param: PIN2
     // @DisplayName: Second button Pin
-    // @Description: Digital pin number for second button input. 
+    // @Description: Digital pin number for second button input.  Some common values are given, but see the Wiki's "GPIOs" page for how to determine the pin number for a given autopilot.
     // @User: Standard
     // @Values: -1:Disabled,50:AUXOUT1,51:AUXOUT2,52:AUXOUT3,53:AUXOUT4,54:AUXOUT5,55:AUXOUT6
     AP_GROUPINFO("PIN2",  2, AP_Button, pin[1], -1),
 
     // @Param: PIN3
     // @DisplayName: Third button Pin
-    // @Description: Digital pin number for third button input. 
+    // @Description: Digital pin number for third button input.  Some common values are given, but see the Wiki's "GPIOs" page for how to determine the pin number for a given autopilot.
     // @User: Standard
     // @Values: -1:Disabled,50:AUXOUT1,51:AUXOUT2,52:AUXOUT3,53:AUXOUT4,54:AUXOUT5,55:AUXOUT6
     AP_GROUPINFO("PIN3",  3, AP_Button, pin[2], -1),
 
     // @Param: PIN4
     // @DisplayName: Fourth button Pin
-    // @Description: Digital pin number for fourth button input. 
+    // @Description: Digital pin number for fourth button input. Some common values are given, but see the Wiki's "GPIOs" page for how to determine the pin number for a given autopilot.
     // @User: Standard
     // @Values: -1:Disabled,50:AUXOUT1,51:AUXOUT2,52:AUXOUT3,53:AUXOUT4,54:AUXOUT5,55:AUXOUT6
     AP_GROUPINFO("PIN4",  4, AP_Button, pin[3], -1),
@@ -71,54 +75,51 @@ const AP_Param::GroupInfo AP_Button::var_info[] = {
 
     // @Param: OPTIONS1
     // @DisplayName: Button Pin 1 Options
-    // @Description: Options for Pin 1
+    // @Description: Options for Pin 1. PWM input detects PWM above or below 1800/1200us instead of logic level. If PWM is not detected or is less than 800us or above 2200us the button will interpreted as low. Invert changes HIGH state to be logic low voltage on pin, or below 1200us, if PWM input.
     // @User: Standard
     // @Bitmask: 0:PWM Input,1:InvertInput
     AP_GROUPINFO("OPTIONS1",  6, AP_Button, options[0], 0),
 
     // @Param: OPTIONS2
     // @DisplayName: Button Pin 2 Options
-    // @Description: Options for Pin 2
+    // @Description: Options for Pin 2. PWM input detects PWM above or below 1800/1200us instead of logic level. If PWM is not detected or is less than 800us or above 2200us the button will interpreted as low. Invert changes HIGH state to be logic low voltage on pin, or below 1200us, if PWM input.
     // @User: Standard
     // @Bitmask: 0:PWM Input,1:InvertInput
     AP_GROUPINFO("OPTIONS2",  7, AP_Button, options[1], 0),
 
     // @Param: OPTIONS3
     // @DisplayName: Button Pin 3 Options
-    // @Description: Options for Pin 3
-    // @User: Standard
+    // @Description: Options for Pin 3. PWM input detects PWM above or below 1800/1200us instead of logic level. If PWM is not detected or is less than 800us or above 2200us the button will interpreted as low. Invert changes HIGH state to be logic low voltage on pin, or below 1200us, if PWM input.
     // @Bitmask: 0:PWM Input,1:InvertInput
     AP_GROUPINFO("OPTIONS3",  8, AP_Button, options[2], 0),
 
     // @Param: OPTIONS4
     // @DisplayName: Button Pin 4 Options
-    // @Description: Options for Pin 4
+    // @Description: Options for Pin 4. PWM input detects PWM above or below 1800/1200us instead of logic level. If PWM is not detected or is less than 800us or above 2200us the button will interpreted as low. Invert changes HIGH state to be logic low voltage on pin, or below 1200us, if PWM input.
     // @User: Standard
     // @Bitmask: 0:PWM Input,1:InvertInput
     AP_GROUPINFO("OPTIONS4",  9, AP_Button, options[3], 0),
 
     // @Param: FUNC1
+    // @CopyFieldsFrom: RC1_OPTION
     // @DisplayName: Button Pin 1 RC Channel function
-    // @Description: Function executed on pin change
+    // @Description: Auxiliary RC Options function executed on pin change
     // @User: Standard
     AP_GROUPINFO("FUNC1",  10, AP_Button, pin_func[0], (uint16_t)RC_Channel::AUX_FUNC::DO_NOTHING),
 
     // @Param: FUNC2
+    // @CopyFieldsFrom: BTN_FUNC1
     // @DisplayName: Button Pin 2 RC Channel function
-    // @Description: Function executed on pin change
-    // @User: Standard
     AP_GROUPINFO("FUNC2",  11, AP_Button, pin_func[1], (uint16_t)RC_Channel::AUX_FUNC::DO_NOTHING),
 
     // @Param: FUNC3
+    // @CopyFieldsFrom: BTN_FUNC1
     // @DisplayName: Button Pin 3 RC Channel function
-    // @Description: Function executed on pin change
-    // @User: Standard
     AP_GROUPINFO("FUNC3",  12, AP_Button, pin_func[2], (uint16_t)RC_Channel::AUX_FUNC::DO_NOTHING),
 
     // @Param: FUNC4
+    // @CopyFieldsFrom: BTN_FUNC1
     // @DisplayName: Button Pin 4 RC Channel function
-    // @Description: Function executed on pin change
-    // @User: Standard
     AP_GROUPINFO("FUNC4",  13, AP_Button, pin_func[3], (uint16_t)RC_Channel::AUX_FUNC::DO_NOTHING),
 
     AP_GROUPEND    
@@ -177,24 +178,41 @@ void AP_Button::update(void)
             continue;
         }
         const uint16_t pwm_us = pwm_pin_source[i].get_pwm_us();
+        if (pwm_us < RC_Channel::RC_MIN_LIMIT_PWM || pwm_us > RC_Channel::RC_MAX_LIMIT_PWM) {
+            // invalid pulse width, trigger low
+            if (pwm_state & mask) {
+                new_pwm_state &= ~mask;
+            }
+            continue;
+        }
         // these values are the same as used in RC_Channel:
         if (pwm_state & mask) {
             // currently asserted; check to see if we should de-assert
-            if (pwm_us < RC_Channel::AUX_PWM_TRIGGER_LOW) {
+            if (pwm_us < RC_Channel::AUX_SWITCH_PWM_TRIGGER_LOW) {
                 new_pwm_state &= ~mask;
             }
         } else {
             // currently not asserted; check to see if we should assert
-            if (pwm_us > RC_Channel::AUX_PWM_TRIGGER_HIGH) {
+            if (pwm_us > RC_Channel::AUX_SWITCH_PWM_TRIGGER_HIGH) {
                 new_pwm_state |= mask;
             }
         }
     }
+    const uint64_t now_ms = AP_HAL::millis64();
     if (new_pwm_state != pwm_state) {
-        pwm_state = new_pwm_state;
-        last_debounce_ms = AP_HAL::millis64();
+        if (new_pwm_state != tentative_pwm_state) {
+            tentative_pwm_state = new_pwm_state;
+            pwm_start_debounce_ms = now_ms;
+        } else if (now_ms - pwm_start_debounce_ms > DEBOUNCE_MS) {
+            pwm_state = new_pwm_state;
+            last_debounce_ms = now_ms;
+        }
+    } else {
+        tentative_pwm_state = pwm_state;
+        pwm_start_debounce_ms = now_ms;
     }
 
+#if HAL_GCS_ENABLED
     if (last_debounce_ms != 0 &&
         (AP_HAL::millis() - last_report_ms) > AP_BUTTON_REPORT_PERIOD_MS &&
         (AP_HAL::millis64() - last_debounce_ms) < report_send_time*1000ULL) {
@@ -204,6 +222,7 @@ void AP_Button::update(void)
         // send a report to GCS
         send_report();
     }
+#endif
 
     if (!aux_functions_initialised) {
         run_aux_functions(true);
@@ -253,13 +272,13 @@ void AP_Button::run_aux_functions(bool force)
 
         const RC_Channel::AuxSwitchPos pos = value ? RC_Channel::AuxSwitchPos::HIGH : RC_Channel::AuxSwitchPos::LOW;
         // I wonder if we can do better here:
-#if !HAL_MINIMIZE_FEATURES
+#if AP_RC_CHANNEL_AUX_FUNCTION_STRINGS_ENABLED
         const char *str = rc_channel->string_for_aux_function(func);
         if (str != nullptr) {
-            gcs().send_text(MAV_SEVERITY_INFO, "Button: executing (%s)", str);
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Button %i: executing (%s %s)", i+1, str, rc_channel->string_for_aux_pos(pos));
         }
 #endif
-        rc_channel->do_aux_function(func, pos);
+        rc_channel->run_aux_function(func, pos, RC_Channel::AuxFuncTrigger::Source::BUTTON, i);
     }
 }
 
@@ -321,10 +340,11 @@ void AP_Button::timer_update(void)
     }
 }
 
+#if HAL_GCS_ENABLED
 /*
   send a BUTTON_CHANGE report to the GCS
  */
-void AP_Button::send_report(void)
+void AP_Button::send_report(void) const
 {
     const uint8_t mask = last_mask | pwm_state;
     const mavlink_button_change_t packet{
@@ -335,6 +355,7 @@ void AP_Button::send_report(void)
     gcs().send_to_active_channels(MAVLINK_MSG_ID_BUTTON_CHANGE,
                                   (const char *)&packet);
 }
+#endif
 
 /*
   setup the pins as input with pullup. We need pullup to give reliable
@@ -357,6 +378,26 @@ void AP_Button::setup_pins(void)
     }
 }
 
+// check settings are valid
+bool AP_Button::arming_checks(size_t buflen, char *buffer) const
+{
+    if (!enable) {
+        return true;
+    }
+    for (uint8_t i=0; i<AP_BUTTON_NUM_PINS; i++) {
+        if (pin[i] != -1 && !hal.gpio->valid_pin(pin[i])) {
+            uint8_t servo_ch;
+            if (hal.gpio->pin_to_servo_channel(pin[i], servo_ch)) {
+                hal.util->snprintf(buffer, buflen, "BTN_PIN%u=%d, set SERVO%u_FUNCTION=-1", unsigned(i + 1), int(pin[i].get()), unsigned(servo_ch+1));
+            } else {
+                hal.util->snprintf(buffer, buflen, "BTN_PIN%u=%d invalid", unsigned(i + 1), int(pin[i].get()));
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace AP {
 
 AP_Button &button()
@@ -365,3 +406,5 @@ AP_Button &button()
 }
 
 }
+
+#endif

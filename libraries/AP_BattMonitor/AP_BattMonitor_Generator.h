@@ -2,7 +2,7 @@
 
 #include <AP_Generator/AP_Generator.h>
 
-#if GENERATOR_ENABLED
+#if HAL_GENERATOR_ENABLED
 
 #include "AP_BattMonitor.h"
 #include "AP_BattMonitor_Backend.h"
@@ -25,7 +25,7 @@ public:
     bool has_consumed_energy(void) const override;
 
     // Override backend update_failsafes.  No point in failsafing twice so generator failsafes are only updated from the electrical instance of the generator drivers
-    AP_BattMonitor::BatteryFailsafe update_failsafes() override;
+    AP_BattMonitor::Failsafe update_failsafes() override;
 };
 
 // Sub class for generator fuel
@@ -44,7 +44,7 @@ public:
     // This is where we tell the battery monitor 'we have current' if we want to report a fuel level remaining
     bool has_current(void) const override;
 
-    // This is where we tell the battery monitor 'we have consummed energy' if we want to report a fuel level remaining
+    // This is where we tell the battery monitor 'we have consumed energy' if we want to report a fuel level remaining
     bool has_consumed_energy(void) const override;
 };
 #endif

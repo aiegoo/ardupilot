@@ -2,7 +2,7 @@
 
 #include "AP_Generator.h"
 
-#if GENERATOR_ENABLED
+#if HAL_GENERATOR_ENABLED
 
 class AP_Generator_Backend
 {
@@ -21,8 +21,8 @@ public:
     virtual bool pre_arm_check(char *failmsg, uint8_t failmsg_len) const { return true; }
 
     // Set default to not fail failsafes
-    virtual AP_BattMonitor::BatteryFailsafe update_failsafes(void) const {
-        return AP_BattMonitor::BatteryFailsafe::BatteryFailsafe_None;
+    virtual AP_BattMonitor::Failsafe update_failsafes(void) const {
+        return AP_BattMonitor::Failsafe::None;
     }
 
     virtual bool healthy(void) const = 0;
@@ -43,7 +43,7 @@ protected:
     // Measurements readings to write to front end
     float _voltage;
     float _current;
-    float _fuel_remain_pct; // Decimal from 0 to 1
+    float _fuel_remaining; // Decimal from 0 to 1
     float _consumed_mah;
     uint16_t _rpm;
 

@@ -14,11 +14,12 @@
 */
 #pragma once
 
-#ifndef HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
-#define HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL 1
-#endif
+#include "AP_Frsky_config.h"
+
+#if AP_FRSKY_TELEM_ENABLED
 
 #include "AP_Frsky_Backend.h"
+#include "AP_Frsky_SPort.h"
 
 class AP_Frsky_Parameters;
 
@@ -30,8 +31,7 @@ public:
     ~AP_Frsky_Telem();
 
     /* Do not allow copies */
-    AP_Frsky_Telem(const AP_Frsky_Telem &other) = delete;
-    AP_Frsky_Telem &operator=(const AP_Frsky_Telem&) = delete;
+    CLASS_NO_COPY(AP_Frsky_Telem);
 
     // init - perform required initialisation
     bool init(bool use_external_data=false);
@@ -41,7 +41,7 @@ public:
     }
 
     // get next telemetry data for external consumers of SPort data
-    static bool get_telem_data(uint8_t &frame, uint16_t &appid, uint32_t &data);
+    static bool get_telem_data(AP_Frsky_Backend::sport_packet_t* packet_array, uint8_t &packet_count, const uint8_t max_size);
 #if HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
     // set telemetry data from external producer of SPort data
     static bool set_telem_data(const uint8_t frame,const uint16_t appid, const uint32_t data);
@@ -57,16 +57,15 @@ public:
 private:
 
     AP_Frsky_Backend *_backend;
-
-#if HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
     AP_Frsky_Parameters* _frsky_parameters;
 
     // get next telemetry data for external consumers of SPort data (internal function)
-    bool _get_telem_data(uint8_t &frame, uint16_t &appid, uint32_t &data);
+    bool _get_telem_data(AP_Frsky_Backend::sport_packet_t* packet_array, uint8_t &packet_count, const uint8_t max_size);
+#if HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
     // set telemetry data from external producer of SPort data (internal function)
     bool _set_telem_data(const uint8_t frame, const uint16_t appid, const uint32_t data);
 #endif
-
+    static void try_create_singleton_for_external_data(void);
     static AP_Frsky_Telem *singleton;
 
 };
@@ -74,3 +73,5 @@ private:
 namespace AP {
     AP_Frsky_Telem *frsky_telem();
 };
+
+#endif  // AP_FRSKY_TELEM_ENABLED

@@ -17,11 +17,17 @@
 
 #include "AP_Filesystem_backend.h"
 
+#include "AP_Filesystem_config.h"
+
+#if AP_FILESYSTEM_SYS_ENABLED
+
+class ExpandingString;
+
 class AP_Filesystem_Sys : public AP_Filesystem_Backend
 {
 public:
     // functions that closely match the equivalent posix calls
-    int open(const char *fname, int flags) override;
+    int open(const char *fname, int flags, bool allow_absolute_paths = false) override;
     int close(int fd) override;
     int32_t read(int fd, void *buf, uint32_t count) override;
     int32_t lseek(int fd, int32_t offset, int whence) override;
@@ -35,11 +41,6 @@ private:
     static constexpr uint8_t max_open_file = 4;
     int8_t file_in_sysfs(const char *fname);
 
-    struct file_data {
-        char *data;
-        size_t length;
-    };
-
     struct DirReadTracker {
         size_t file_offset;
         struct dirent curr_file;
@@ -48,6 +49,8 @@ private:
     struct rfile {
         bool open;
         uint32_t file_ofs;
-        struct file_data *data;
+        ExpandingString *str;
     } file[max_open_file];
 };
+
+#endif  // AP_FILESYSTEM_SYS_ENABLED

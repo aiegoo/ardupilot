@@ -18,6 +18,8 @@ public:
     static const uint8_t CELL10 = 0x36;
     static const uint8_t CELL11 = 0x35;
     static const uint8_t CELL12 = 0x34;
+    static const uint8_t CELL13 = 0x33;
+    static const uint8_t CELL14 = 0x32;
 };
 
 class SIM_BattMonitor_SMBus_Generic : public SIM_BattMonitor_SMBus
@@ -28,8 +30,9 @@ public:
     void init() override;
     void update(const class Aircraft &aircraft) override;
 
-    virtual uint8_t cellcount() const = 0;
+    virtual uint8_t cellcount() const { return 12; }
 
+    virtual uint8_t connected_cells() const { return 3; }
 };
 
 } // namespace SITL

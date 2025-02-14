@@ -19,7 +19,7 @@
 
 #include "AP_SLCANIface.h"
 
-#if HAL_MAX_CAN_PROTOCOL_DRIVERS
+#if AP_CAN_SLCAN_ENABLED
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/AP_Common.h>
 
@@ -27,7 +27,8 @@
 
 #include <AP_SerialManager/AP_SerialManager.h>
 #include <stdio.h>
-#include <AP_Vehicle/AP_Vehicle.h>
+#include <AP_Vehicle/AP_Vehicle_Type.h>
+#include <GCS_MAVLink/GCS.h>
 
 #define LOG_TAG "SLCAN"
 
@@ -81,24 +82,7 @@ static uint8_t nibble2hex(uint8_t x)
 
 static uint8_t hex2nibble(char c)
 {
-    // Must go into RAM, not flash, because flash is slow
-    static uint8_t NumConversionTable[] = {
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9
-    };
-
-    static uint8_t AlphaConversionTable[] = {
-        10, 11, 12, 13, 14, 15
-    };
-
-    uint8_t out = 255;
-
-    if (c >= '0' && c <= '9') {
-        out = NumConversionTable[int(c) - int('0')];
-    } else if (c >= 'a' && c <= 'f') {
-        out = AlphaConversionTable[int(c) - int('a')];
-    } else if (c >= 'A' && c <= 'F') {
-        out = AlphaConversionTable[int(c) - int('A')];
-    }
+    uint8_t out = char_to_hex(c);
 
     if (out == 255) {
         hex2nibble_error = true;
@@ -106,23 +90,13 @@ static uint8_t hex2nibble(char c)
     return out;
 }
 
-int SLCAN::CANIface::set_port(AP_HAL::UARTDriver* port)
-{
-    if (port == nullptr) {
-        return -1;
-    }
-    _port = port;
-    return 0;
-}
-
-
 bool SLCAN::CANIface::push_Frame(AP_HAL::CANFrame &frame)
 {
     AP_HAL::CANIface::CanRxItem frm;
     frm.frame = frame;
     frm.flags = 0;
-    frm.timestamp_us = AP_HAL::native_micros64();
-    return rx_queue_.push(frm);
+    frm.timestamp_us = AP_HAL::micros64();
+    return add_to_rx_queue(frm);
 }
 
 /**
@@ -130,10 +104,11 @@ bool SLCAN::CANIface::push_Frame(AP_HAL::CANFrame &frame)
  *  <type> <id> <dlc> <data>
  * The emitting functions below are highly optimized for speed.
  */
-bool SLCAN::CANIface::handle_FrameDataExt(const char* cmd)
+bool SLCAN::CANIface::handle_FrameDataExt(const char* cmd, bool canfd)
 {
-    AP_HAL::CANFrame f;
+    AP_HAL::CANFrame f {};
     hex2nibble_error = false;
+    f.canfd = canfd;
     f.id = f.FlagEFF |
            (hex2nibble(cmd[1]) << 28) |
            (hex2nibble(cmd[2]) << 24) |
@@ -143,16 +118,14 @@ bool SLCAN::CANIface::handle_FrameDataExt(const char* cmd)
            (hex2nibble(cmd[6]) <<  8) |
            (hex2nibble(cmd[7]) <<  4) |
            (hex2nibble(cmd[8]) <<  0);
-    if (cmd[9] < '0' || cmd[9] > ('0' + AP_HAL::CANFrame::MaxDataLen)) {
-        return false;
-    }
-    f.dlc = cmd[9] - '0';
-    if (f.dlc > AP_HAL::CANFrame::MaxDataLen) {
+    f.dlc = hex2nibble(cmd[9]);
+    if (hex2nibble_error || f.dlc > (canfd?15:8)) {
         return false;
     }
     {
         const char* p = &cmd[10];
-        for (unsigned i = 0; i < f.dlc; i++) {
+        const uint8_t dlen = AP_HAL::CANFrame::dlcToDataLength(f.dlc);
+        for (unsigned i = 0; i < dlen; i++) {
             f.data[i] = (hex2nibble(*p) << 4) | hex2nibble(*(p + 1));
             p += 2;
         }
@@ -163,18 +136,58 @@ bool SLCAN::CANIface::handle_FrameDataExt(const char* cmd)
     return push_Frame(f);
 }
 
+/**
+ * General frame format:
+ *  <type> <id> <dlc> <data>
+ * The emitting functions below are highly optimized for speed.
+ */
+bool SLCAN::CANIface::handle_FDFrameDataExt(const char* cmd)
+{
+#if HAL_CANFD_SUPPORTED
+    return false;
+#else
+    AP_HAL::CANFrame f {};
+    hex2nibble_error = false;
+    f.canfd = true;
+    f.id = f.FlagEFF |
+           (hex2nibble(cmd[1]) << 28) |
+           (hex2nibble(cmd[2]) << 24) |
+           (hex2nibble(cmd[3]) << 20) |
+           (hex2nibble(cmd[4]) << 16) |
+           (hex2nibble(cmd[5]) << 12) |
+           (hex2nibble(cmd[6]) <<  8) |
+           (hex2nibble(cmd[7]) <<  4) |
+           (hex2nibble(cmd[8]) <<  0);
+    f.dlc = hex2nibble(cmd[9]);
+    if (f.dlc > AP_HAL::CANFrame::dataLengthToDlc(AP_HAL::CANFrame::MaxDataLen)) {
+        return false;
+    }
+    {
+        const char* p = &cmd[10];
+        for (unsigned i = 0; i < AP_HAL::CANFrame::dlcToDataLength(f.dlc); i++) {
+            f.data[i] = (hex2nibble(*p) << 4) | hex2nibble(*(p + 1));
+            p += 2;
+        }
+    }
+    if (hex2nibble_error) {
+        return false;
+    }
+    return push_Frame(f);
+#endif //#if HAL_CANFD_SUPPORTED
+}
+
 bool SLCAN::CANIface::handle_FrameDataStd(const char* cmd)
 {
-    AP_HAL::CANFrame f;
+    AP_HAL::CANFrame f {};
     hex2nibble_error = false;
     f.id = (hex2nibble(cmd[1]) << 8) |
            (hex2nibble(cmd[2]) << 4) |
            (hex2nibble(cmd[3]) << 0);
-    if (cmd[4] < '0' || cmd[4] > ('0' + AP_HAL::CANFrame::MaxDataLen)) {
+    if (cmd[4] < '0' || cmd[4] > ('0' + AP_HAL::CANFrame::NonFDCANMaxDataLen)) {
         return false;
     }
     f.dlc = cmd[4] - '0';
-    if (f.dlc > AP_HAL::CANFrame::MaxDataLen) {
+    if (f.dlc > AP_HAL::CANFrame::NonFDCANMaxDataLen) {
         return false;
     }
     {
@@ -192,7 +205,7 @@ bool SLCAN::CANIface::handle_FrameDataStd(const char* cmd)
 
 bool SLCAN::CANIface::handle_FrameRTRExt(const char* cmd)
 {
-    AP_HAL::CANFrame f;
+    AP_HAL::CANFrame f {};
     hex2nibble_error = false;
     f.id = f.FlagEFF | f.FlagRTR |
            (hex2nibble(cmd[1]) << 28) |
@@ -203,12 +216,12 @@ bool SLCAN::CANIface::handle_FrameRTRExt(const char* cmd)
            (hex2nibble(cmd[6]) <<  8) |
            (hex2nibble(cmd[7]) <<  4) |
            (hex2nibble(cmd[8]) <<  0);
-    if (cmd[9] < '0' || cmd[9] > ('0' + AP_HAL::CANFrame::MaxDataLen)) {
+    if (cmd[9] < '0' || cmd[9] > ('0' + AP_HAL::CANFrame::NonFDCANMaxDataLen)) {
         return false;
     }
     f.dlc = cmd[9] - '0';
 
-    if (f.dlc > AP_HAL::CANFrame::MaxDataLen) {
+    if (f.dlc > AP_HAL::CANFrame::NonFDCANMaxDataLen) {
         return false;
     }
     if (hex2nibble_error) {
@@ -219,17 +232,17 @@ bool SLCAN::CANIface::handle_FrameRTRExt(const char* cmd)
 
 bool SLCAN::CANIface::handle_FrameRTRStd(const char* cmd)
 {
-    AP_HAL::CANFrame f;
+    AP_HAL::CANFrame f {};
     hex2nibble_error = false;
     f.id = f.FlagRTR |
            (hex2nibble(cmd[1]) << 8) |
            (hex2nibble(cmd[2]) << 4) |
            (hex2nibble(cmd[3]) << 0);
-    if (cmd[4] < '0' || cmd[4] > ('0' + AP_HAL::CANFrame::MaxDataLen)) {
+    if (cmd[4] < '0' || cmd[4] > ('0' + AP_HAL::CANFrame::NonFDCANMaxDataLen)) {
         return false;
     }
     f.dlc = cmd[4] - '0';
-    if (f.dlc <= AP_HAL::CANFrame::MaxDataLen) {
+    if (f.dlc <= AP_HAL::CANFrame::NonFDCANMaxDataLen) {
         return false;
     }
     if (hex2nibble_error) {
@@ -255,7 +268,9 @@ bool SLCAN::CANIface::init_passthrough(uint8_t i)
     _can_iface = hal.can[i];
     _iface_num = _slcan_can_port - 1;
     _prev_ser_port = -1;
+#if HAL_CANMANAGER_ENABLED
     AP::can().log_text(AP_CANManager::LOG_INFO, LOG_TAG, "Setting SLCAN Passthrough for CAN%d\n", _slcan_can_port - 1);
+#endif
     return true;
 }
 
@@ -275,7 +290,11 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
     if (_port == nullptr) {
         return -1;
     }
+#if HAL_CANFD_SUPPORTED
+    constexpr unsigned SLCANMaxFrameSize = 200;
+#else
     constexpr unsigned SLCANMaxFrameSize = 40;
+#endif
     uint8_t buffer[SLCANMaxFrameSize] = {'\0'};
     uint8_t* p = &buffer[0];
     /*
@@ -285,7 +304,13 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
         *p++ = frame.isExtended() ? 'R' : 'r';
     } else if (frame.isErrorFrame()) {
         return -1;     // Not supported
-    } else {
+    }
+#if HAL_CANFD_SUPPORTED
+    else if (frame.canfd) {
+        *p++ = frame.isExtended() ? 'D' : 'd';
+    }
+#endif 
+    else {
         *p++ = frame.isExtended() ? 'T' : 't';
     }
 
@@ -309,12 +334,12 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
     /*
     * DLC
     */
-    *p++ = char('0' + frame.dlc);
+    *p++ = nibble2hex(frame.dlc);
 
     /*
     * Data
     */
-    for (unsigned i = 0; i < frame.dlc; i++) {
+    for (unsigned i = 0; i < AP_HAL::CANFrame::dlcToDataLength(frame.dlc); i++) {
         const uint8_t byte = frame.data[i];
         *p++ = nibble2hex(byte >> 4);
         *p++ = nibble2hex(byte);
@@ -338,8 +363,7 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
     *p++ = '\r';
     const auto frame_size = unsigned(p - &buffer[0]);
 
-    if (_port->txspace() < _pending_frame_size) {
-        _pending_frame_size = frame_size;
+    if (_port->txspace() < frame_size) {
         return 0;
     }
     //Write to Serial
@@ -360,8 +384,8 @@ const char* SLCAN::CANIface::processCommand(char* cmd)
     /*
     * High-traffic SLCAN commands go first
     */
-    if (cmd[0] == 'T') {
-        return handle_FrameDataExt(cmd) ? "Z\r" : "\a";
+    if (cmd[0] == 'T' || cmd[0] == 'D') {
+        return handle_FrameDataExt(cmd, cmd[0]=='D') ? "Z\r" : "\a";
     } else if (cmd[0] == 't') {
         return handle_FrameDataStd(cmd) ? "z\r" : "\a";
     } else if (cmd[0] == 'R') {
@@ -370,6 +394,12 @@ const char* SLCAN::CANIface::processCommand(char* cmd)
         // See long commands below
         return handle_FrameRTRStd(cmd) ? "z\r" : "\a";
     }
+#if HAL_CANFD_SUPPORTED 
+    else if (cmd[0] == 'D') {
+        return handle_FDFrameDataExt(cmd) ? "Z\r" : "\a";
+    }
+#endif
+
     uint8_t resp_bytes[40];
     uint16_t resp_len;
     /*
@@ -465,12 +495,17 @@ inline void SLCAN::CANIface::addByte(const uint8_t byte)
 
 void SLCAN::CANIface::update_slcan_port()
 {
+    const bool armed = hal.util->get_soft_armed();
     if (_set_by_sermgr) {
-        // Once we pick SerialManager path we hold on 
-        // to that until reboot
+        if (armed && _port != nullptr) {
+            // auto-disable when armed
+            _port->lock_port(0, 0);
+            _port = nullptr;
+            _set_by_sermgr = false;
+        }
         return;
     }
-    if (_port == nullptr) {
+    if (_port == nullptr && !armed) {
          _port = AP::serialmanager().find_serial(AP_SerialManager::SerialProtocol_SLCAN, 0);
         if (_port != nullptr) {
             _port->lock_port(_serial_lock_key, _serial_lock_key);
@@ -480,10 +515,10 @@ void SLCAN::CANIface::update_slcan_port()
     }
     if (_prev_ser_port != _slcan_ser_port) {
         if (!_slcan_start_req) {
-            _slcan_start_req_time = AP_HAL::native_millis();
+            _slcan_start_req_time = AP_HAL::millis();
             _slcan_start_req = true;
         }
-        if (((AP_HAL::native_millis() - _slcan_start_req_time) < ((uint32_t)_slcan_start_delay*1000))) {
+        if (((AP_HAL::millis() - _slcan_start_req_time) < ((uint32_t)_slcan_start_delay*1000))) {
             return;
         }
         _port = AP::serialmanager().get_serial_by_id(_slcan_ser_port);
@@ -493,13 +528,13 @@ void SLCAN::CANIface::update_slcan_port()
         }
         _port->lock_port(_serial_lock_key, _serial_lock_key);
         _prev_ser_port = _slcan_ser_port;
-        gcs().send_text(MAV_SEVERITY_INFO, "CANManager: Starting SLCAN Passthrough on Serial %d with CAN%d", _slcan_ser_port.get(), _iface_num);
-        _last_had_activity = AP_HAL::native_millis();
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CANManager: Starting SLCAN Passthrough on Serial %d with CAN%d", _slcan_ser_port.get(), _iface_num);
+        _last_had_activity = AP_HAL::millis();
     }
     if (_port == nullptr) {
         return;
     }
-    if (((AP_HAL::native_millis() - _last_had_activity) > ((uint32_t)_slcan_timeout*1000)) &&
+    if (((AP_HAL::millis() - _last_had_activity) > ((uint32_t)_slcan_timeout*1000)) &&
         (uint32_t)_slcan_timeout != 0) {
         _port->lock_port(0, 0);
         _port = nullptr;
@@ -509,11 +544,11 @@ void SLCAN::CANIface::update_slcan_port()
     }
 }
 
-bool SLCAN::CANIface::set_event_handle(AP_HAL::EventHandle* evt_handle)
+bool SLCAN::CANIface::set_event_handle(AP_HAL::BinarySemaphore *sem_handle)
 {
     // When in passthrough mode methods is handled through can iface
     if (_can_iface) {
-        return _can_iface->set_event_handle(evt_handle);
+        return _can_iface->set_event_handle(sem_handle);
     }
     return false;
 }
@@ -536,13 +571,12 @@ uint32_t SLCAN::CANIface::getErrorCount() const
     return 0;
 }
 
-uint32_t SLCAN::CANIface::get_stats(char* data, uint32_t max_size)
+void SLCAN::CANIface::get_stats(ExpandingString &str)
 {
     // When in passthrough mode methods is handled through can iface
     if (_can_iface) {
-        return _can_iface->get_stats(data, max_size);
+        _can_iface->get_stats(str);
     }
-    return 0;
 }
 
 bool SLCAN::CANIface::is_busoff() const
@@ -607,6 +641,9 @@ bool SLCAN::CANIface::select(bool &read, bool &write, const AP_HAL::CANFrame* co
         return ret;
     }
 
+    // ensure we own the UART. Locking is handled at the CAN interface level
+    _port->begin_locked(0, 0, 0, _serial_lock_key);
+    
     // if under passthrough, we only do send when can_iface also allows it
     if (_port->available_locked(_serial_lock_key) || rx_queue_.available()) {
         // allow for receiving messages over slcan
@@ -632,10 +669,14 @@ int16_t SLCAN::CANIface::send(const AP_HAL::CANFrame& frame, uint64_t tx_deadlin
         return ret;
     }
 
-    if (frame.isErrorFrame() || frame.dlc > 8) {
+    if (frame.isErrorFrame()
+#if !HAL_CANFD_SUPPORTED
+        || frame.dlc > 8
+#endif
+        ) {
         return ret;
     }
-    reportFrame(frame, AP_HAL::native_micros64());
+    reportFrame(frame, AP_HAL::micros64());
     return ret;
 }
 
@@ -650,14 +691,14 @@ int16_t SLCAN::CANIface::receive(AP_HAL::CANFrame& out_frame, uint64_t& rx_time,
         if (ret > 0) {
             // we also pass this frame through to slcan iface,
             // and immediately return
-            reportFrame(out_frame, AP_HAL::native_micros64());
+            reportFrame(out_frame, AP_HAL::micros64());
             return ret;
         } else if (ret < 0) {
             return ret;
         }
     }
 
-    // We found nothing in HAL's CANIface recieve, so look in SLCANIface
+    // We found nothing in HAL's CANIface receive, so look in SLCANIface
     if (_port == nullptr) {
         return 0;
     }
@@ -666,17 +707,20 @@ int16_t SLCAN::CANIface::receive(AP_HAL::CANFrame& out_frame, uint64_t& rx_time,
         uint32_t num_bytes = _port->available_locked(_serial_lock_key);
         // flush bytes from port
         while (num_bytes--) {
-            int16_t ret = _port->read_locked(_serial_lock_key);
-            if (ret <= 0) {
+            uint8_t b;
+            if (_port->read_locked(&b, 1, _serial_lock_key) != 1) {
                 break;
             }
-            addByte(ret);
+            addByte(b);
+            if (!rx_queue_.space()) {
+                break;
+            }
         }
     }
     if (rx_queue_.available()) {
         // if we already have something in buffer transmit it
         CanRxItem frm;
-        if (!rx_queue_.pop(frm)) {
+        if (!rx_queue_.peek(frm)) {
             return 0;
         }
         out_frame = frm.frame;
@@ -686,7 +730,22 @@ int16_t SLCAN::CANIface::receive(AP_HAL::CANFrame& out_frame, uint64_t& rx_time,
         // Also send this frame over can_iface when in passthrough mode,
         // We just push this frame without caring for priority etc
         if (_can_iface) {
-            _can_iface->send(out_frame, AP_HAL::native_micros64() + 1000, out_flags);
+            bool read = false;
+            bool write = true;
+            _can_iface->select(read, write, &out_frame, 0); // select without blocking
+            if (write && _can_iface->send(out_frame, AP_HAL::micros64() + 100000, out_flags) == 1) {
+                    rx_queue_.pop();
+                    num_tries = 0;
+            } else if (num_tries > 8) {
+                rx_queue_.pop();
+                num_tries = 0;
+            } else {
+                num_tries++;
+            }
+        } else {
+            // we just throw away frames if we don't
+            // have any can iface to pass through to
+            rx_queue_.pop();
         }
         return 1;
     }
@@ -697,4 +756,4 @@ void SLCAN::CANIface::reset_params()
 {
     _slcan_ser_port.set_and_save(-1);
 }
-#endif
+#endif  // AP_CAN_SLCAN_ENABLED

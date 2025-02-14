@@ -59,18 +59,6 @@ void LR_MsgHandler_REV2::process_message(uint8_t *msgbytes)
     case AP_DAL::Event::resetHeightDatum:
         ekf2.resetHeightDatum();
         break;
-    case AP_DAL::Event::setTakeoffExpected:
-        ekf2.setTakeoffExpected(true);
-        break;
-    case AP_DAL::Event::unsetTakeoffExpected:
-        ekf2.setTakeoffExpected(false);
-        break;
-    case AP_DAL::Event::setTouchdownExpected:
-        ekf2.setTouchdownExpected(true);
-        break;
-    case AP_DAL::Event::unsetTouchdownExpected:
-        ekf2.setTouchdownExpected(false);
-        break;
     case AP_DAL::Event::setTerrainHgtStable:
         ekf2.setTerrainHgtStable(true);
         break;
@@ -82,6 +70,8 @@ void LR_MsgHandler_REV2::process_message(uint8_t *msgbytes)
         break;
     case AP_DAL::Event::checkLaneSwitch:
         ekf2.checkLaneSwitch();
+        break;
+    case AP_DAL::Event::setSourceSet0 ... AP_DAL::Event::setSourceSet2:
         break;
     }
     if (replay_force_ekf3) {
@@ -128,18 +118,6 @@ void LR_MsgHandler_REV3::process_message(uint8_t *msgbytes)
     case AP_DAL::Event::resetHeightDatum:
         ekf3.resetHeightDatum();
         break;
-    case AP_DAL::Event::setTakeoffExpected:
-        ekf3.setTakeoffExpected(true);
-        break;
-    case AP_DAL::Event::unsetTakeoffExpected:
-        ekf3.setTakeoffExpected(false);
-        break;
-    case AP_DAL::Event::setTouchdownExpected:
-        ekf3.setTouchdownExpected(true);
-        break;
-    case AP_DAL::Event::unsetTouchdownExpected:
-        ekf3.setTouchdownExpected(false);
-        break;
     case AP_DAL::Event::setTerrainHgtStable:
         ekf3.setTerrainHgtStable(true);
         break;
@@ -151,6 +129,9 @@ void LR_MsgHandler_REV3::process_message(uint8_t *msgbytes)
         break;
     case AP_DAL::Event::checkLaneSwitch:
         ekf3.checkLaneSwitch();
+        break;
+    case AP_DAL::Event::setSourceSet0 ... AP_DAL::Event::setSourceSet2:
+        ekf3.setPosVelYawSourceSet(uint8_t(msg.event)-uint8_t(AP_DAL::Event::setSourceSet0));
         break;
     }
 
@@ -177,7 +158,7 @@ void LR_MsgHandler_RSO3::process_message(uint8_t *msgbytes)
 void LR_MsgHandler_RWA3::process_message(uint8_t *msgbytes)
 {
     MSG_CREATE(RWA3, msgbytes);
-    ekf3.writeDefaultAirSpeed(msg.airspeed);
+    ekf3.writeDefaultAirSpeed(msg.airspeed, msg.uncertainty);
     if (replay_force_ekf2) {
         LR_MsgHandler_RWA2 h{f, ekf2, ekf3};
         h.process_message(msgbytes);
@@ -305,6 +286,12 @@ void LR_MsgHandler_RBOH::process_message(uint8_t *msgbytes)
 void LR_MsgHandler_REPH::process_message(uint8_t *msgbytes)
 {
     MSG_CREATE(REPH, msgbytes);
+    AP::dal().handle_message(msg, ekf2, ekf3);
+}
+
+void LR_MsgHandler_RSLL::process_message(uint8_t *msgbytes)
+{
+    MSG_CREATE(RSLL, msgbytes);
     AP::dal().handle_message(msg, ekf2, ekf3);
 }
 

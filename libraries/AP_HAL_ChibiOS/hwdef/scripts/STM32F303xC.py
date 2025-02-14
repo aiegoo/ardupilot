@@ -12,9 +12,6 @@ build = {
 
 # MCU parameters
 mcu = {
-    # location of MCU serial number
-    'UDID_START' : 0x1FFFF7AC,
-
     # ram map, as list of (address, size-kb, flags)
     # flags of 1 means DMA-capable
     # flags of 2 means faster memory for CPU intensive work
@@ -23,7 +20,12 @@ mcu = {
         (0x10000000,   8, 2), # CCM memory, faster, but not DMA safe
     ],
 
-    'EXPECTED_CLOCK' : 72000000
+    'EXPECTED_CLOCK' : 72000000,
+
+    'DEFINES' : {
+        'STM32F3' : '1',
+    }
+
 }
 
 AltFunction_map = {

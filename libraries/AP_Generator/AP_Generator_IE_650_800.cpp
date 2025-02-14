@@ -13,9 +13,11 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma GCC optimize("Os")
+
 #include "AP_Generator_IE_650_800.h"
 
-#if GENERATOR_ENABLED
+#if AP_GENERATOR_IE_650_800_ENABLED
 
 extern const AP_HAL::HAL& hal;
 
@@ -28,7 +30,7 @@ void AP_Generator_IE_650_800::init()
     // This unit does not have current but this needs to be true to make use of consumed_mah in BattMonitor
     _frontend._has_current = true;
     _frontend._has_consumed_energy = true;
-    _frontend._has_fuel_remaining = false;
+    _frontend._has_fuel_remaining = true;
 }
 
 // Update fuel cell, expected to be called at 20hz
@@ -40,7 +42,7 @@ void AP_Generator_IE_650_800::assign_measurements(const uint32_t now)
     _err_code = _parsed.err_code;
 
     // Update variables to be returned to front end
-    _fuel_remain_pct = _parsed.tank_pct * 0.01;
+    _fuel_remaining = _parsed.tank_pct * 0.01;
 
     // Invert bat remaining percent to match AP_BattMonitor convention
     _consumed_mah = 100.0f - _parsed.battery_pct;
@@ -59,9 +61,14 @@ void AP_Generator_IE_650_800::decode_latest_term()
     _term_offset = 0;
     _term_number++;
 
+    if (_start_char != '<') {
+        _sentence_valid = false;
+        return;
+    }
+
     switch (_term_number) {
         case 1:
-            _parsed.tank_pct = atof(_term);
+            _parsed.tank_pct = strtof(_term, NULL);
             // Out of range values
             if (_parsed.tank_pct > 100.0f || _parsed.tank_pct < 0.0f) {
                 _data_valid = false;
@@ -69,7 +76,7 @@ void AP_Generator_IE_650_800::decode_latest_term()
             break;
 
         case 2:
-            _parsed.battery_pct = atof(_term);
+            _parsed.battery_pct = strtof(_term, NULL);
             // Out of range values
             if (_parsed.battery_pct > 100.0f || _parsed.battery_pct < 0.0f) {
                 _data_valid = false;
@@ -83,7 +90,7 @@ void AP_Generator_IE_650_800::decode_latest_term()
         case 4:
             _parsed.err_code = strtoul(_term, nullptr, 16);
             // Sentence only declared valid when we have the expected number of terms
-            _sentence_valid = true && _data_valid;
+            _sentence_valid = _data_valid;
             break;
 
         default:
@@ -107,19 +114,20 @@ bool AP_Generator_IE_650_800::check_for_err_code(char* msg_txt, uint8_t msg_len)
 }
 
 // Check for failsafes
-AP_BattMonitor::BatteryFailsafe AP_Generator_IE_650_800::update_failsafes() const
+AP_BattMonitor::Failsafe AP_Generator_IE_650_800::update_failsafes() const
 {
     // Check if we are in a critical failsafe
     if ((_err_code & fs_crit_mask) != 0) {
-        return  AP_BattMonitor::BatteryFailsafe::BatteryFailsafe_Critical;
+        return  AP_BattMonitor::Failsafe::Critical;
     }
 
     // Check if we are in a low failsafe
     if ((_err_code & fs_low_mask) != 0) {
-        return  AP_BattMonitor::BatteryFailsafe::BatteryFailsafe_Low;
+        return  AP_BattMonitor::Failsafe::Low;
     }
 
-    return AP_BattMonitor::BatteryFailsafe::BatteryFailsafe_None;
+    return AP_BattMonitor::Failsafe::None;
 }
 
-#endif
+#endif  // AP_GENERATOR_IE_650_800_ENABLED
+

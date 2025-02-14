@@ -13,6 +13,9 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "AP_RangeFinder_LightWareI2C.h"
+
+#if AP_RANGEFINDER_LWI2C_ENABLED
+
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/sparse-endian.h>
 
@@ -21,9 +24,9 @@ extern const AP_HAL::HAL& hal;
 #define LIGHTWARE_DISTANCE_READ_REG 0
 #define LIGHTWARE_LOST_SIGNAL_TIMEOUT_READ_REG 22
 #define LIGHTWARE_LOST_SIGNAL_TIMEOUT_WRITE_REG 23
-#define LIGHTWARE_TIMEOUT_REG_DESIRED_VALUE 5
+#define LIGHTWARE_TIMEOUT_REG_DESIRED_VALUE 20      // number of lost signal confirmations for legacy protocol only
 
-#define LIGHTWARE_OUT_OF_RANGE_ADD_CM   100
+#define LIGHTWARE_OUT_OF_RANGE_ADD   1.00  // metres
 
 static const size_t lx20_max_reply_len_bytes = 32;
 static const size_t lx20_max_expected_stream_reply_len_bytes = 14;
@@ -78,7 +81,7 @@ AP_RangeFinder_Backend *AP_RangeFinder_LightWareI2C::detect(RangeFinder::RangeFi
     }
 
     AP_RangeFinder_LightWareI2C *sensor
-        = new AP_RangeFinder_LightWareI2C(_state, _params, std::move(dev));
+        = NEW_NOTHROW AP_RangeFinder_LightWareI2C(_state, _params, std::move(dev));
 
     if (!sensor) {
         return nullptr;
@@ -152,7 +155,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_send_and_expect(const char* send_msg, con
   send a native command and fill a reply into a buffer. Used for
   version string
  */
-void AP_RangeFinder_LightWareI2C::sf20_get_version(const char* send_msg, const char *reply_prefix, char reply[15])
+void AP_RangeFinder_LightWareI2C::sf20_get_version(const char* send_msg, const char *reply_prefix, char *reply, uint8_t reply_len)
 {
     const size_t expected_reply_len = 16;
     uint8_t rx_bytes[expected_reply_len + 1];
@@ -178,7 +181,7 @@ void AP_RangeFinder_LightWareI2C::sf20_get_version(const char* send_msg, const c
         // give a bit of time for the remaining bytes to be available
         hal.scheduler->delay(1);
     }
-    memcpy(reply, &rx_bytes[2], 14);
+    memcpy(reply, &rx_bytes[2], reply_len);
 }
 
 /* Driver first attempts to initialize the sf20.
@@ -188,14 +191,14 @@ void AP_RangeFinder_LightWareI2C::sf20_get_version(const char* send_msg, const c
 bool AP_RangeFinder_LightWareI2C::init()
 {
     if (sf20_init()) {
-        hal.console->printf("Found SF20 native Lidar\n");
+        DEV_PRINTF("Found SF20 native Lidar\n");
         return true;
     }
     if (legacy_init()) {
-        hal.console->printf("Found SF20 legacy Lidar\n");
+        DEV_PRINTF("Found SF20 legacy Lidar\n");
         return true;
     }
-    hal.console->printf("SF20 not found\n");
+    DEV_PRINTF("SF20 not found\n");
     return false;
 }
 
@@ -239,10 +242,11 @@ bool AP_RangeFinder_LightWareI2C::sf20_init()
     // version strings for reporting
     char version[15] {};
 
-    sf20_get_version("?P\r\n", "p:", version);
+    // -1 here preserves null termination on the version string:
+    sf20_get_version("?P\r\n", "p:", version, ARRAY_SIZE(version)-1);
 
     if (version[0]) {
-        hal.console->printf("SF20 Lidar version %s\n", version);
+        DEV_PRINTF("SF20 Lidar version %s\n", version);
     }
 
     // Makes sure that "address tagging" is turned off.
@@ -337,7 +341,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_init()
 }
 
 // read - return last value measured by sensor
-bool AP_RangeFinder_LightWareI2C::legacy_get_reading(uint16_t &reading_cm)
+bool AP_RangeFinder_LightWareI2C::legacy_get_reading(float &reading_m)
 {
     be16_t val;
 
@@ -348,9 +352,9 @@ bool AP_RangeFinder_LightWareI2C::legacy_get_reading(uint16_t &reading_cm)
         int16_t signed_val = int16_t(be16toh(val));
         if (signed_val < 0) {
             // some lidar firmwares will return 65436 for out of range
-            reading_cm = uint16_t(max_distance_cm() + LIGHTWARE_OUT_OF_RANGE_ADD_CM);
+            reading_m = max_distance() + LIGHTWARE_OUT_OF_RANGE_ADD;
         } else {
-            reading_cm = uint16_t(signed_val);
+            reading_m = uint16_t(signed_val) * 0.01f;
         }
         return true;
     }
@@ -358,7 +362,7 @@ bool AP_RangeFinder_LightWareI2C::legacy_get_reading(uint16_t &reading_cm)
 }
 
 // read - return last value measured by sf20 sensor
-bool AP_RangeFinder_LightWareI2C::sf20_get_reading(uint16_t &reading_cm)
+bool AP_RangeFinder_LightWareI2C::sf20_get_reading(float &reading_m)
 {
     // Parses up to 5 ASCII streams for LiDAR data.
     // If a parse fails, the stream measurement is not updated until it is successfully read in the future.
@@ -378,7 +382,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_get_reading(uint16_t &reading_cm)
     }
 
     if (i==0) {
-        reading_cm = sf20_stream_val[0];
+        reading_m = sf20_stream_val[0];
     }
 
     // Increment the stream sequence
@@ -397,7 +401,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_get_reading(uint16_t &reading_cm)
 bool AP_RangeFinder_LightWareI2C::sf20_parse_stream(uint8_t *stream_buf,
         size_t *p_num_processed_chars,
         const char *string_identifier,
-        uint16_t &val)
+        float &val)
 {
     size_t string_identifier_len = strlen(string_identifier);
     for (uint32_t i = 0 ; i < string_identifier_len ; i++) {
@@ -413,7 +417,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_parse_stream(uint8_t *stream_buf,
       we will return max distance
      */
     if (strncmp((const char *)&stream_buf[*p_num_processed_chars], "-1.00", 5) == 0) {
-        val = uint16_t(max_distance_cm() + LIGHTWARE_OUT_OF_RANGE_ADD_CM);
+        val = max_distance() + LIGHTWARE_OUT_OF_RANGE_ADD;
         (*p_num_processed_chars) += 5;
         return true;
     }
@@ -448,7 +452,7 @@ bool AP_RangeFinder_LightWareI2C::sf20_parse_stream(uint8_t *stream_buf,
     }
 
     accumulator *= final_multiplier;
-    val = accumulator;
+    val = accumulator * 0.01;
     return number_found;
 }
 
@@ -462,7 +466,7 @@ void AP_RangeFinder_LightWareI2C::update(void)
 
 void AP_RangeFinder_LightWareI2C::legacy_timer(void)
 {
-    if (legacy_get_reading(state.distance_cm)) {
+    if (legacy_get_reading(state.distance_m)) {
         // update range_valid state based on distance measured
         update_status();
     } else {
@@ -472,7 +476,7 @@ void AP_RangeFinder_LightWareI2C::legacy_timer(void)
 
 void AP_RangeFinder_LightWareI2C::sf20_timer(void)
 {
-    if (sf20_get_reading(state.distance_cm)) {
+    if (sf20_get_reading(state.distance_m)) {
         // update range_valid state based on distance measured
         update_status();
     } else {
@@ -500,3 +504,5 @@ bool AP_RangeFinder_LightWareI2C::sf20_wait_on_reply(uint8_t *rx_two_byte)
     }
     return false;
 }
+
+#endif  // AP_RANGEFINDER_LWI2C_ENABLED

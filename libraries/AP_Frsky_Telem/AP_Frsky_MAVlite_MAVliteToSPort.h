@@ -1,5 +1,9 @@
 #pragma once
 
+#include "AP_Frsky_config.h"
+
+#if HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
+
 #include "AP_Frsky_MAVlite_Message.h"
 #include "AP_Frsky_SPort.h"
 
@@ -50,3 +54,5 @@ private:
     int16_t checksum;                       // sent at end of packet
     void update_checksum(const uint8_t c);
 };
+
+#endif  // HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL

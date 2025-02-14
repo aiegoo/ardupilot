@@ -12,10 +12,9 @@ public:
     AP_NavEKF_Source();
 
     /* Do not allow copies */
-    AP_NavEKF_Source(const AP_NavEKF_Source &other) = delete;
-    AP_NavEKF_Source &operator=(const AP_NavEKF_Source&) = delete;
+    CLASS_NO_COPY(AP_NavEKF_Source);
 
-    enum class SourceXY {
+    enum class SourceXY : uint8_t {
         NONE = 0,
         // BARO = 1 (not applicable)
         // RANGEFINDER = 2 (not applicable)
@@ -26,7 +25,7 @@ public:
         WHEEL_ENCODER = 7
     };
 
-    enum class SourceZ {
+    enum class SourceZ : uint8_t {
         NONE = 0,
         BARO = 1,
         RANGEFINDER = 2,
@@ -37,31 +36,41 @@ public:
         // WHEEL_ENCODER = 7 (not applicable)
     };
 
-    enum class SourceYaw {
+    enum class SourceYaw : uint8_t {
         NONE = 0,
         COMPASS = 1,
-        EXTERNAL = 2,
-        EXTERNAL_COMPASS_FALLBACK = 3
+        GPS = 2,
+        GPS_COMPASS_FALLBACK = 3,
+        EXTNAV = 6,
+        GSF = 8
     };
 
     // enum for OPTIONS parameter
     enum class SourceOptions {
-        FUSE_ALL_VELOCITIES = (1 << 0)  // fuse all velocities configured in source sets
+        FUSE_ALL_VELOCITIES = (1 << 0),                 // fuse all velocities configured in source sets
+        ALIGN_EXTNAV_POS_WHEN_USING_OPTFLOW = (1 << 1)  // align position of inactive sources to ahrs when using optical flow
+    };
+
+    enum class SourceSetSelection : uint8_t {
+        PRIMARY = 0,
+        SECONDARY = 1,
+        TERTIARY = 2,
     };
 
     // initialisation
     void init();
 
     // get current position source
-    SourceXY getPosXYSource() const { return _active_source_set.posxy; }
-    SourceZ getPosZSource() const { return _active_source_set.posz; }
+    SourceXY getPosXYSource() const { return _source_set[active_source_set].posxy; }
+    SourceZ getPosZSource() const;
 
     // set position, velocity and yaw sources to either 0=primary, 1=secondary, 2=tertiary
-    void setPosVelYawSourceSet(uint8_t source_set_idx);
+    void setPosVelYawSourceSet(SourceSetSelection source_set_idx);
+    uint8_t getPosVelYawSourceSet() const { return active_source_set; }
 
     // get/set velocity source
-    SourceXY getVelXYSource() const { return _active_source_set.velxy; }
-    SourceZ getVelZSource() const { return _active_source_set.velz; }
+    SourceXY getVelXYSource() const { return _source_set[active_source_set].velxy; }
+    SourceZ getVelZSource() const { return _source_set[active_source_set].velz; }
 
     // true/false of whether velocity source should be used
     bool useVelXYSource(SourceXY velxy_source) const;
@@ -71,7 +80,7 @@ public:
     bool haveVelZSource() const;
 
     // get yaw source
-    SourceYaw getYawSource() const { return _active_source_set.yaw; }
+    SourceYaw getYawSource() const;
 
     // align position of inactive sources to ahrs
     void align_inactive_sources();
@@ -82,46 +91,45 @@ public:
     bool usingGPS() const;
 
     // true if source parameters have been configured (used for parameter conversion)
-    bool configured_in_storage();
+    bool configured();
 
-    // mark parameters as configured in storage (used to ensure parameter conversion is only done once)
-    void mark_configured_in_storage();
+    // mark parameters as configured (used to ensure parameter conversion is only done once)
+    void mark_configured();
 
     // returns false if we fail arming checks, in which case the buffer will be populated with a failure message
-    bool pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const;
-
-    static const struct AP_Param::GroupInfo var_info[];
+    // requires_position should be true if horizontal position configuration should be checked
+    bool pre_arm_check(bool requires_position, char *failure_msg, uint8_t failure_msg_len) const;
 
     // return true if ext nav is enabled on any source
     bool ext_nav_enabled(void) const;
 
-    // return true if ext yaw is enabled on any source
-    bool ext_yaw_enabled(void) const;
-    
+    // return true if GPS yaw is enabled on any source
+    bool gps_yaw_enabled(void) const;
+
     // return true if wheel encoder is enabled on any source
     bool wheel_encoder_enabled(void) const;
-    
+
+    // returns active source set 
+    uint8_t get_active_source_set() const;
+
+    static const struct AP_Param::GroupInfo var_info[];
+
 private:
 
     // Parameters
     struct SourceSet {
-        AP_Int8 posxy;  // xy position source
-        AP_Int8 velxy;  // xy velocity source
-        AP_Int8 posz;   // position z (aka altitude or height) source
-        AP_Int8 velz;   // velocity z source
-        AP_Int8 yaw;    // yaw source
+        AP_Enum<SourceXY>  posxy;  // xy position source
+        AP_Enum<SourceXY>  velxy;  // xy velocity source
+        AP_Enum<SourceZ>   posz;   // position z (aka altitude or height) source
+        AP_Enum<SourceZ>   velz;   // velocity z source
+        AP_Enum<SourceYaw> yaw;    // yaw source
     } _source_set[AP_NAKEKF_SOURCE_SET_MAX];
+
+    // helper to check if an option parameter bit has been set
+    bool option_is_set(SourceOptions option) const { return (_options.get() & int16_t(option)) != 0; }
 
     AP_Int16 _options;      // source options bitmask
 
-    // active sources
-    struct {
-        SourceXY posxy;     // current xy position source
-        SourceZ posz;       // current z position source
-        SourceXY velxy;     // current xy velocity source
-        SourceZ velz;       // current z velocity source
-        SourceYaw yaw;      // current yaw source
-    } _active_source_set;
-    bool initialised;       // true once init has been run
-    bool config_in_storage; // true once configured in storage has returned true
+    uint8_t active_source_set; // index of active source set
+    bool _configured; // true once configured has returned true
 };

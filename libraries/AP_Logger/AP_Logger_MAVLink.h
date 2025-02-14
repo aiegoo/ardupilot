@@ -5,15 +5,11 @@
  */
 #pragma once
 
-#define LOGGER_MAVLINK_SUPPORT 1
-
-#if LOGGER_MAVLINK_SUPPORT
-
-#include <AP_HAL/AP_HAL.h>
-
 #include "AP_Logger_Backend.h"
 
-extern const AP_HAL::HAL& hal;
+#if HAL_LOGGING_MAVLINK_ENABLED
+
+#include <AP_HAL/Semaphores.h>
 
 #define DF_MAVLINK_DISABLE_INTERRUPTS 0
 
@@ -21,14 +17,12 @@ class AP_Logger_MAVLink : public AP_Logger_Backend
 {
 public:
     // constructor
-    AP_Logger_MAVLink(AP_Logger &front, LoggerMessageWriter_DFLogStart *writer) :
-        AP_Logger_Backend(front, writer),
-        _max_blocks_per_send_blocks(8)
-        ,_perf_packing(hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, "DM_packing"))
-        {
-            _blockcount = 1024*((uint8_t)_front._params.mav_bufsize) / sizeof(struct dm_block);
-            // ::fprintf(stderr, "DM: Using %u blocks\n", _blockcount);
-        }
+    AP_Logger_MAVLink(class AP_Logger &front, LoggerMessageWriter_DFLogStart *writer);
+
+    static AP_Logger_Backend  *probe(AP_Logger &front,
+                                     LoggerMessageWriter_DFLogStart *ls) {
+        return NEW_NOTHROW AP_Logger_MAVLink(front, ls);
+    }
 
     // initialisation
     void Init() override;
@@ -50,13 +44,13 @@ public:
     void EraseAll() override {}
 
     void PrepForArming() override {}
-    void Prep() override { }
 
     // high level interface
     uint16_t find_last_log(void) override { return 0; }
     void get_log_boundaries(uint16_t log_num, uint32_t & start_page, uint32_t & end_page) override {}
     void get_log_info(uint16_t log_num, uint32_t &size, uint32_t &time_utc) override {}
     int16_t get_log_data(uint16_t log_num, uint16_t page, uint32_t offset, uint16_t len, uint8_t *data) override { return 0; }
+    void end_log_transfer() override { };
     uint16_t get_num_logs(void) override { return 0; }
 
     void remote_log_block_status_msg(const GCS_MAVLINK &link, const mavlink_message_t& msg) override;
@@ -148,7 +142,7 @@ private:
     void Write_logger_MAV(AP_Logger_MAVLink &logger);
 
     uint32_t bufferspace_available() override; // in bytes
-    uint8_t remaining_space_in_current_block();
+    uint8_t remaining_space_in_current_block() const;
     // write buffer
     uint8_t _blockcount_free;
     uint8_t _blockcount;
@@ -173,12 +167,8 @@ private:
     void start_new_log(void) override {
         return;
     }
-    // performance counters
-    AP_HAL::Util::perf_counter_t  _perf_errors;
-    AP_HAL::Util::perf_counter_t  _perf_packing;
-    AP_HAL::Util::perf_counter_t  _perf_overruns;
 
     HAL_Semaphore semaphore;
 };
 
-#endif // LOGGER_MAVLINK_SUPPORT
+#endif // HAL_LOGGING_MAVLINK_ENABLED
